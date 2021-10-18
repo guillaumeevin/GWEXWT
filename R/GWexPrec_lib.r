@@ -560,27 +560,17 @@ get.listOption = function(listOption){
     listOption[['nLag']] = nLag
   }
   
+  # minConcDays
+  if('minConcDays' %in% names(listOption)){
+    minConcDays = listOption[['minConcDays']]
+    if(!is.numeric(minConcDays)) stop('minConcDays must be a numerical value')
+  }else{
+    minConcDays = 500
+    listOption[['minConcDays']] = minConcDays
+  }
+  
   
   #_____ options for amount
-  
-  # typeMargin
-  if('typeMargin' %in% names(listOption)){
-    typeMargin = listOption[['typeMargin']]
-    if(!(typeMargin %in% c('mixExp','EGPD'))) stop('wrong value for typeMargin')
-  }else{
-    typeMargin = 'EGPD'
-    listOption[['typeMargin']] = typeMargin
-  }
-  
-  # xiHat
-  if('xiHat' %in% names(listOption)){
-    xiHat = listOption[['xiHat']]
-    xiVec = as.vector(as.matrix(xiHat[2:ncol(xiHat)]))
-    if(!all(is.numeric(xiVec)&(xiVec>=0))) stop('wrong value for xiHat')
-  }else{
-    xiHat = NULL
-    listOption[['xiHat']] = xiHat
-  }
   
   # copulaInt
   if('copulaInt' %in% names(listOption)){
@@ -652,6 +642,8 @@ get.listOption = function(listOption){
 #' @param pr.state output of function \code{\link{lag.trans.proba.mat.byClass}}
 #' @param nChainFit length of the simulated chains used during the fitting
 #' @param isParallel logical: indicate computation in parallel or not (easier for debugging)
+#' @param minConcDays integer: minimum number of concomittant days for estimation between each pair of station
+#' @param mat.distance matrix of distance between each pair of stations
 #'
 #' @return A list with different objects 
 #' \itemize{
@@ -661,16 +653,40 @@ get.listOption = function(listOption){
 #' }
 #'
 #' @author Guillaume Evin
-infer.mat.omega = function(P.mat,isClass,th,nLag,pr.state,nChainFit,isParallel){
+infer.mat.omega = function(P.mat,isClass,th,nLag,pr.state,nChainFit,isParallel,minConcDays,mat.distance){
   
   # filtered matrix of precipitation for this period (3-mon moving window by dafault)
-  P.mat.per = P.mat[isClass,]
+  P.mat.class = P.mat[isClass,]
   
   # observed correlation of dry/wet states (see Eq. 6 in Evin et al. 2018)
-  pi0 = dry.day.frequency(P.mat.per,th)
-  pi1 = wet.day.frequency(P.mat.per,th)
-  pi.occ = joint.proba.occ(P.mat.per,th)
+  pi0 = dry.day.frequency(P.mat.class,th)
+  pi1 = wet.day.frequency(P.mat.class,th)
+  pi.occ = joint.proba.occ(P.mat.class,th)
   cor.occ.obs = cor.obs.occ(pi.occ$p00,pi0,pi1)
+  
+  # set to NA if not enough concomittant days
+  p = ncol(P.mat.class)
+  for(i in 1:p){
+    for(j in 1:p){
+      if(sum(!is.na(P.mat.class[,i])&!is.na(P.mat.class[,j]))<minConcDays) cor.occ.obs[i,j] = NA
+    }
+  }
+  
+  
+  #### replace values NA values by estimates obtained with a loess model
+  
+  # put distances and correlations in vectors
+  cor.vec = as.vector(cor.occ.obs)
+  dist.vec = as.vector(mat.distance)
+  
+  # select non na values and cor < 1
+  zz = !is.na(cor.vec) & cor.vec<1
+  cor.zz = cor.vec[zz]
+  dist.zz = dist.vec[zz]
+  
+  # robust linear regression
+  loess.out = loess(cc~dd,data = data.frame(cc=cor.zz,dd=dist.zz), control=loess.control(surface="direct"))
+  cor.occ.obs[is.na(cor.vec)] = predict(loess.out,newdata = data.frame(dd=dist.vec[is.na(cor.vec)]))
   
   # number of possible transitions
   n.comb = 2^nLag
@@ -725,11 +741,11 @@ infer.mat.omega = function(P.mat,isClass,th,nLag,pr.state,nChainFit,isParallel){
 get.mat.omega = function(cor.obs,Qtrans.mat,mat.comb,nLag,nChainFit,isParallel){
   # number of stations
   p = ncol(cor.obs)
-
+  
   # possible pairs
   vec.pairs = combn(1:p, 2)
   n.pairs = ncol(vec.pairs)
-
+  
   # apply find.omega for each pair of stations
   if(isParallel){
     omega.paral = foreach(i.pair=1:n.pairs, .combine='cbind') %dopar% {
@@ -745,11 +761,11 @@ get.mat.omega = function(cor.obs,Qtrans.mat,mat.comb,nLag,nChainFit,isParallel){
       omega.paral[i.pair] = find.omega(cor.obs[i,j],Qtrans.mat[c(i,j),],mat.comb,nLag,nChainFit)
     }
   }
-
+  
   # prepare results
   mat.omega = matrix(0,nrow=p,ncol=p)
   diag(mat.omega) = 1
-
+  
   # fill matrix
   for(i.pair in 1:n.pairs){
     i = vec.pairs[1,i.pair]
@@ -757,9 +773,11 @@ get.mat.omega = function(cor.obs,Qtrans.mat,mat.comb,nLag,nChainFit,isParallel){
     mat.omega[i,j] = omega.paral[i.pair]
     mat.omega[j,i] = omega.paral[i.pair]
   }
-
+  
   return(mat.omega)
 }
+
+
 
 
 #==============================================================================
@@ -777,14 +795,36 @@ get.mat.omega = function(cor.obs,Qtrans.mat,mat.comb,nLag,nChainFit,isParallel){
 #'
 #' @author Guillaume Evin
 find.omega = function(rho.emp,Qtrans.mat,mat.comb,nLag,nChainFit){
-  f1 = cor.emp.occ(1,Qtrans.mat,mat.comb,nLag,nChainFit) - rho.emp
-  if(f1<=0){
+  # f.inf and f.sup represent resp. the minimum and maximum differences
+  # which can be obtained with the simulated correlation and the empirical
+  # correlation
+  f.inf = cor.emp.occ(-1,Qtrans.mat,mat.comb,nLag,nChainFit) - rho.emp
+  f.sup = cor.emp.occ(1,Qtrans.mat,mat.comb,nLag,nChainFit) - rho.emp
+  
+  # if f.sup<=0, it means that even with the a max omega value of 1, we cannot reach
+  # the empirical correlation (negative difference between simulated cor and emp. cor)
+  # we simply return a max possible omega value (less than 1 since 1 correlation leads to numerical pb)
+  if(f.sup<=0){
     return(1)
+  }else if(f.inf>=0){
+    # if f.inf>=0, it means that even with the a min omega value of -1, we cannot reach
+    # the empirical correlation (positive difference between simulated cor and emp. cor)
+    # we simply return a 0 value since negative values are not physically plausible
+    # it can happen when emp correlation are estimated on short series (uncertain estimate) 
+    return(0)
   }else{
-    f = function(w){
-      cor.emp.occ(w,Qtrans.mat,mat.comb,nLag,nChainFit) - rho.emp
+    if(rho.emp<0){
+      # if the empirical correlation is negative, we simply return a 0 value since negative 
+      # values are not physically plausible
+      # it can happen when emp correlation are estimated on short series (uncertain estimate) 
+      return(0)
+    }else{
+      # else, we find omega that leads to rho.emp (f should be zero for this omega)
+      f = function(w){
+        cor.emp.occ(w,Qtrans.mat,mat.comb,nLag,nChainFit) - rho.emp
+      }
+      return(uniroot(f,c(rho.emp,1),extendInt="upX", tol = 1e-3)$root)
     }
-    return(uniroot(f,c(rho.emp,1),extendInt="upX", tol = 1e-3)$root)
   }
 }
 
@@ -810,18 +850,18 @@ find.omega = function(rho.emp,Qtrans.mat,mat.comb,nLag,nChainFit){
 cor.emp.occ = function(w,Qtrans.mat,mat.comb,nLag,nChainFit,myseed=1){
   # set seed of random generation
   set.seed(myseed)
-
+  
   # genere gaussienne multivariee
   w.mat = rbind(c(1,w),c(w,1))
   rndNorm = MASS::mvrnorm(nChainFit,rep(0,2),w.mat)
-
+  
   # empirical correlation with the Markov process
   matComb.f = mat.comb*1
   storage.mode(matComb.f) <- "integer"
   
   cor.emp = .Fortran("corMarkovChain", rndNorm=rndNorm, QtransMat=Qtrans.mat, PACKAGE="GWEXWT",
                      matComb=matComb.f, n=as.integer(nChainFit), nLag=as.integer(nLag), r=double(1))$r
-
+  
   # correlations occurrences
   return(cor.emp)
 }
@@ -836,7 +876,6 @@ cor.emp.occ = function(w,Qtrans.mat,mat.comb,nLag,nChainFit,myseed=1){
 #' @param infer.mat.omega.out output of \code{\link{infer.mat.omega}}
 #' @param nLag order of the Markov chain
 #' @param parMargin parameters of the margins 2 x 3
-#' @param typeMargin type of marginal distribution: 'EGPD' or 'mixExp'
 #' @param nChainFit integer indicating the length of simulated chains
 #' @param isParallel logical: indicate computation in parallel or not (easier for debugging)
 #' 
@@ -847,7 +886,7 @@ cor.emp.occ = function(w,Qtrans.mat,mat.comb,nLag,nChainFit,myseed=1){
 #' }
 #'
 #' @author Guillaume Evin
-get.M0 = function(cor.obs,infer.mat.omega.out,nLag,parMargin,typeMargin,nChainFit,isParallel){
+get.M0 = function(cor.obs,infer.mat.omega.out,nLag,parMargin,nChainFit,isParallel){
   
   # retrieve outputs from infer.mat.omega.out
   Qtrans.mat = infer.mat.omega.out$Qtrans.mat
@@ -882,14 +921,14 @@ get.M0 = function(cor.obs,infer.mat.omega.out,nLag,parMargin,typeMargin,nChainFi
     zeta.paral = foreach(i.pair=1:n.pairs, .combine='cbind') %dopar% {
       i = vec.pairs[1,i.pair]
       j = vec.pairs[2,i.pair]
-      return(find.zeta(cor.obs[i,j],nChainFit,Xt[,c(i,j)],parMargin[c(i,j),],typeMargin))
+      return(find.zeta(cor.obs[i,j],nChainFit,Xt[,c(i,j)],parMargin[c(i,j),]))
     }
   }else{
     zeta.paral = vector(length=n.pairs)
     for(i.pair in 1:n.pairs){
       i = vec.pairs[1,i.pair]
       j = vec.pairs[2,i.pair]
-      zeta.paral[i.pair] = find.zeta(cor.obs[i,j],nChainFit,Xt[,c(i,j)],parMargin[c(i,j),],typeMargin)
+      zeta.paral[i.pair] = find.zeta(cor.obs[i,j],nChainFit,Xt[,c(i,j)],parMargin[c(i,j),])
     }
   }
   
@@ -918,21 +957,42 @@ get.M0 = function(cor.obs,infer.mat.omega.out,nLag,parMargin,typeMargin,nChainFi
 #' @param nChainFit number of simulations
 #' @param Xt simulated occurrences, n x 2 matrix
 #' @param parMargin parameters of the margins 2 x 3
-#' @param typeMargin type of marginal distribution: 'EGPD' or 'mixExp'
 #'
 #' @return \item{scalar}{needed correlation}
 #'
 #' @author Guillaume Evin
-find.zeta = function(eta.emp,nChainFit,Xt,parMargin,typeMargin){
-  f1 = cor.emp.int(1,nChainFit,Xt,parMargin,typeMargin) - eta.emp
-  if(f1<=0){
+find.zeta = function(eta.emp,nChainFit,Xt,parMargin){
+  # f.inf and f.sup represent resp. the minimum and maximum differences
+  # which can be obtained with the simulated correlation and the empirical
+  # correlation
+  f.inf = cor.emp.int(0,nChainFit,Xt,parMargin) - eta.emp
+  f.sup = cor.emp.int(1,nChainFit,Xt,parMargin) - eta.emp
+  
+  # if f.sup<=0, it means that even with the a max zeta value of 1, we cannot reach
+  # the empirical correlation (negative difference between simulated cor and emp. cor)
+  # we simply return a max possible zeta value (less than 1 since 1 correlation leads to numerical pb)
+  if(f.sup<=0){
     return(0.99999)
+  }else if(f.inf>=0){
+    # if f.inf>=0, it means that even with the a min zeta value of -1, we cannot reach
+    # the empirical correlation (positive difference between simulated cor and emp. cor)
+    # we simply return a 0 value since negative values are not physically plausible
+    # it can happen when emp correlation are estimated on short series (uncertain estimate) 
+    return(0)
   }else{
-    f = function(w){
-      cor.emp.int(w,nChainFit,Xt,parMargin,typeMargin) - eta.emp
+    if(eta.emp<0){
+      # if the empirical correlation is negative, we simply return a 0 value since negative 
+      # values are not physically plausible
+      # it can happen when emp correlation are estimated on short series (uncertain estimate) 
+      return(0)
+    }else{
+      # else, we find zeta that leads to eta.emp (f should be zero for this zeta)
+      f = function(w){
+        cor.emp.int(w,nChainFit,Xt,parMargin) - eta.emp
+      }
+      zeta = uniroot(f,c(0,1),extendInt="upX",tol = 1e-3)$root
+      return(zeta)
     }
-    zeta = uniroot(f,c(eta.emp,1),extendInt="upX",tol = 1e-3)$root
-    return(zeta)
   }
 }
 
@@ -946,12 +1006,11 @@ find.zeta = function(eta.emp,nChainFit,Xt,parMargin,typeMargin){
 #' @param nChainFit number of simulated variates
 #' @param Xt simulated occurrences, n x 2 matrix
 #' @param parMargin parameters of the margins 2 x 3
-#' @param typeMargin type of marginal distribution: 'EGPD' or 'mixExp'
 #'
 #' @return \item{scalar}{correlation between simulated intensities}
 #'
 #' @author Guillaume Evin
-cor.emp.int = function(zeta,nChainFit,Xt,parMargin,typeMargin){
+cor.emp.int = function(zeta,nChainFit,Xt,parMargin){
   # generate the same random numbers if zeta=1, which avoids problems at the bounds (minimzation diverving, or
   # function having the same signs at both bounds if cor.emp.int(1,...) is slightly less than 0 if zeta=1)
   set.seed(1)
@@ -959,7 +1018,7 @@ cor.emp.int = function(zeta,nChainFit,Xt,parMargin,typeMargin){
   Yt.Pr = pnorm(MASS::mvrnorm(n=nChainFit, mu=rep(0,2), Sigma=matrix(c(1,zeta,zeta,1),2,2)))
   # We obtain directly related intensities
   Yt = array(0,dim=c(nChainFit,2))
-  for(i.st in 1:2) Yt[,i.st] = unif.to.prec(parMargin[i.st,],Yt.Pr[,i.st],typeMargin)
+  for(i.st in 1:2) Yt[,i.st] = unif.to.prec(parMargin[i.st,],Yt.Pr[,i.st])
   # Mask with occurrences
   Yt[Xt==0] = 0
   # cor.Pearson.cor
@@ -976,14 +1035,13 @@ cor.emp.int = function(zeta,nChainFit,Xt,parMargin,typeMargin){
 #' @param vec.ar1.obs vector of observed autocorrelations for all stations
 #' @param Xt simulated occurrences given model parameters of wet/dry states
 #' @param parMargin parameters of the margins 2 x 3
-#' @param typeMargin type of marginal distribution: 'EGPD' or 'mixExp'
 #' @param nChainFit integer indicating the length of the simulated chains
 #' @param isParallel logical: indicate computation in parallel or not (easier for debugging)
 #'
 #' @return \item{vector}{vector of rho parameters to simulate the MAR process}
 #'
 #' @author Guillaume Evin
-get.vec.autocor = function(vec.ar1.obs,Xt,parMargin,typeMargin,nChainFit,isParallel){
+get.vec.autocor = function(vec.ar1.obs,Xt,parMargin,nChainFit,isParallel){
   # number of stations
   p = length(vec.ar1.obs)
   
@@ -991,13 +1049,13 @@ get.vec.autocor = function(vec.ar1.obs,Xt,parMargin,typeMargin,nChainFit,isParal
   if(isParallel){
     iSt = NULL
     vec.autocor = foreach(iSt=1:p, .combine='cbind') %dopar% {
-      return(find.autocor(vec.ar1.obs[iSt],nChainFit,Xt[,iSt],parMargin[iSt,],typeMargin))
+      return(find.autocor(vec.ar1.obs[iSt],nChainFit,Xt[,iSt],parMargin[iSt,]))
     }
     vec.autocor = as.vector(vec.autocor)
   }else{
     vec.autocor = vector(length = p)
     for(iSt in 1:p){
-      vec.autocor[iSt] = find.autocor(vec.ar1.obs[iSt],nChainFit,Xt[,iSt],parMargin[iSt,],typeMargin)
+      vec.autocor[iSt] = find.autocor(vec.ar1.obs[iSt],nChainFit,Xt[,iSt],parMargin[iSt,])
     }
   }
   
@@ -1013,22 +1071,21 @@ get.vec.autocor = function(vec.ar1.obs,Xt,parMargin,typeMargin,nChainFit,isParal
 #' @param nChainFit number of simulations
 #' @param Xt simulated occurrences, nChainFit x 2 matrix
 #' @param parMargin parameters of the margins 2 x 3
-#' @param typeMargin type of marginal distribution: 'EGPD' or 'mixExp'
 #'
 #' @return \item{scalar}{needed correlation}
 #'
 #' @author Guillaume Evin
-find.autocor = function(autocor.emp,nChainFit,Xt,parMargin,typeMargin){
-  f1 = autocor.emp.int(0.95,nChainFit,Xt,parMargin,typeMargin) - autocor.emp
+find.autocor = function(autocor.emp,nChainFit,Xt,parMargin){
+  f1 = autocor.emp.int(0.95,nChainFit,Xt,parMargin) - autocor.emp
   if(f1<=0){
     return(0.95)
   }else{
-    f0 = autocor.emp.int(0,nChainFit,Xt,parMargin,typeMargin) - autocor.emp
+    f0 = autocor.emp.int(0,nChainFit,Xt,parMargin) - autocor.emp
     if(f0>=0){
       return(0)
     }else{
       f = function(w){
-        autocor.emp.int(w,nChainFit,Xt,parMargin,typeMargin) - autocor.emp
+        autocor.emp.int(w,nChainFit,Xt,parMargin) - autocor.emp
       }
       return(uniroot(f,c(0,0.95),tol = 1e-3)$root)
     }
@@ -1044,11 +1101,10 @@ find.autocor = function(autocor.emp,nChainFit,Xt,parMargin,typeMargin){
 #' @param nChainFit number of simulated variates
 #' @param Xt simulated occurrences, nChainFit x 2 matrix
 #' @param parMargin parameters of the margins 2 x 3
-#' @param typeMargin type of marginal distribution: 'EGPD' or 'mixExp'
 #' @return \item{scalar}{correlation between simulated intensities}
 #'
 #' @author Guillaume Evin
-autocor.emp.int = function(rho,nChainFit,Xt,parMargin,typeMargin){
+autocor.emp.int = function(rho,nChainFit,Xt,parMargin){
   # control random seed
   set.seed(1)
   # Simulation from an AR(1) process
@@ -1058,7 +1114,7 @@ autocor.emp.int = function(rho,nChainFit,Xt,parMargin,typeMargin){
   # to proba
   Yt.Pr = pnorm(Yt.AR1)
   # Related intensities
-  Yt = unif.to.prec(parMargin,Yt.Pr,typeMargin)
+  Yt = unif.to.prec(parMargin,Yt.Pr)
   # Mask with occurrences
   Yt[Xt==0] = 0
   # Resulting cor
@@ -1107,39 +1163,39 @@ QtransMat2Array = function(n,p,Qtrans.mat){
 joint.proba.occ = function(P,th){
   # number of stations
   p = ncol(P)
-
+  
   # prepare results
   p00 = p10 = p01 = p11 = matrix(1,nrow=p,ncol=p)
-
+  
   for(i in 1:(p-1)){
     ri = P[,i]
     for(j in (i+1):p){
       rj = P[,j]
       # no nan
       nz = (!is.na(ri)) & (!is.na(rj))
-
+      
       # dry-dry
       p00ij = mean(ri[nz]<=th&rj[nz]<=th)
       p00[i,j] = p00ij
       p00[j,i] = p00ij
-
+      
       # dry-wet
       p01ij = mean(ri[nz]<=th&rj[nz]>th)
       p01[i,j] = p01ij
       p10[j,i] = p01ij
-
+      
       # wet-dry
       p10ij = mean(ri[nz]>th&rj[nz]<=th)
       p10[i,j] = p10ij
       p01[j,i] = p10ij
-
+      
       # wet-wet
       p11ij = mean(ri[nz]>th&rj[nz]>th)
       p11[i,j] = p11ij
       p11[j,i] = p11ij
     }
   }
-
+  
   # joint probabilities
   return(list(p00=p00,p01=p01,p10=p10,p11=p11))
 }
@@ -1165,24 +1221,24 @@ joint.proba.occ = function(P,th){
 cor.obs.occ = function(pi00,pi0,pi1){
   # number of stations
   p = ncol(pi00)
-
+  
   # prepare results
   cor.obs = matrix(1,nrow=p,ncol=p)
   diag(cor.obs) = 1
-
+  
   for(i in 1:(p-1)){
     for(j in (i+1):p){
       # Eq 6 de Mhanna (2012)
       sigi = sqrt(pi0[i]*pi1[i])
       sigj = sqrt(pi0[j]*pi1[j])
       cor.ij =  (pi00[i,j]-pi0[i]*pi0[j])/(sigi*sigj)
-
+      
       # Assign values to matrix
       cor.obs[i,j] = cor.ij
       cor.obs[j,i] = cor.ij
     }
   }
-
+  
   # joint probabilities
   return(cor.obs)
 }
@@ -1197,17 +1253,19 @@ cor.obs.occ = function(pi00,pi0,pi1){
 #' @param infer.mat.omega.out output of \code{\link{infer.mat.omega}}
 #' @param nLag order of he Markov chain for the transitions between dry and wet states (=2 by default)
 #' @param th threshold above which we consider that a day is wet (e.g. 0.2 mm)
-#' @param typeMargin 'EGPD' (Extended GPD) or 'mixExp' (Mixture of Exponentials). 'EGPD' by default
 #' @param parMargin parameters of the margins 2 x 3
 #' @param nChainFit integer, length of the runs used during the fitting procedure. =100000 by default
 #' @param isMAR logical value, do we apply a Autoregressive Multivariate Autoregressive model (order 1) =TRUE by default
 #' @param copulaInt 'Gaussian' or 'Student': type of dependence for amounts (='Student' by default)
 #' @param isParallel logical: indicate computation in parallel or not (easier for debugging)
-#'
+#' @param minConcDays integer: minimum number of concomittant days for estimation between each pair of station
+#' @param mat.distance matrix of distance between each pair of stations
+#' 
 #' @return \item{list}{list of estimates (e.g., M0, dfStudent)}
 #'
 #' @author Guillaume Evin
-infer.dep.amount = function(P.mat,isClass,infer.mat.omega.out,nLag,th,typeMargin,parMargin,nChainFit,isMAR,copulaInt,isParallel){
+infer.dep.amount = function(P.mat,isClass,infer.mat.omega.out,nLag,th,parMargin,nChainFit,
+                            isMAR,copulaInt,isParallel,minConcDays,mat.distance){
   # number of stations
   p = ncol(P.mat)
   n = nrow(P.mat)
@@ -1221,8 +1279,33 @@ infer.dep.amount = function(P.mat,isClass,infer.mat.omega.out,nLag,th,typeMargin
   # direct pairwise Pearson correlations
   cor.int = cor(P.mat.class, use="pairwise.complete.obs")
   
-  # find corresponding needed zeta correlations between simulated intensities
-  get.M0.out = get.M0(cor.int,infer.mat.omega.out,nLag,parMargin,typeMargin,nChainFit,isParallel)
+  # set to NA if not enough concomittant days
+  p = ncol(P.mat.class)
+  for(i in 1:p){
+    for(j in 1:p){
+      if(sum(!is.na(P.mat.class[,i])&!is.na(P.mat.class[,j]))<minConcDays) cor.int[i,j] = NA
+    }
+  }
+  
+  
+  #### replace values NA values by estimates obtained with a loess model
+  
+  # put distances and correlations in vectors
+  cor.vec = as.vector(cor.int)
+  dist.vec = as.vector(mat.distance)
+  
+  # select non na values and cor < 1
+  zz = !is.na(cor.vec) & cor.vec<1
+  cor.zz = cor.vec[zz]
+  dist.zz = dist.vec[zz]
+  
+  # robust linear regression
+  loess.out = loess(cc~dd,data = data.frame(cc=cor.zz,dd=dist.zz), control=loess.control(surface="direct"))
+  cor.int[is.na(cor.vec)] = predict(loess.out,newdata = data.frame(dd=dist.vec[is.na(cor.vec)]))
+  
+  
+  #### find corresponding needed zeta correlations between simulated intensities
+  get.M0.out = get.M0(cor.int,infer.mat.omega.out,nLag,parMargin,nChainFit,isParallel)
   M0 = modify.cor.matrix(get.M0.out$M0)
   
   # find remaining parameters if necessary
@@ -1250,13 +1333,13 @@ infer.dep.amount = function(P.mat,isClass,infer.mat.omega.out,nLag,th,typeMargin
     }
     
     # find corresponding ar(1) parameter
-    vec.ar1 = get.vec.autocor(vec.ar1.obs,get.M0.out$Xt,parMargin,typeMargin,nChainFit,isParallel)
+    vec.ar1 = get.vec.autocor(vec.ar1.obs,get.M0.out$Xt,parMargin,nChainFit,isParallel)
     
     # apply a MAR(1) process: multivariate autoregressive process, order 1
     par.dep.amount = fit.MAR1.amount(P.mat,isClass,th,copulaInt,M0=M0,A=diag(vec.ar1))
   }else{
     # spatial process
-    par.dep.amount = fit.copula.amount(P.mat,isClass,copulaInt,M0)
+    par.dep.amount = fit.copula.amount(P.mat,isClass,th,copulaInt,M0)
   }
 }
 
@@ -1391,106 +1474,19 @@ fit.MAR1.amount = function(P.mat,isClass,th,copulaInt,M0,A){
 
 
 #==============================================================================
-#' infer.parMarginal
-#'
-#' estimate parameters which control the marginal distribution of precipitation amounts
-#' for all stations
-#' 
-#' @param P.mat matrix of precipitation n x p
-#' @param isClass vector of logical n x 1 indicating the days concerned by a class (season/WT)
-#' @param th threshold above which we consider that a day is wet (e.g. 0.2 mm)
-#' @param typeMargin type of marginal distribution: 'EGPD' or 'mixExp' (mixture of exponentials)
-#' @param xiHatClass vector of xi (p x 1) estimates for the 'EGPD' distribution. If NULL, it is set to 0.05
-#'
-#' @return \item{matrix}{matrix of estimates p x 3}
-#'
-#' @author Guillaume Evin
-infer.parMarginal = function(P.mat,isClass,th,typeMargin,xiHatClass){
-  
-  # number of stations
-  p = ncol(P.mat)
-  
-  # filtered data
-  P.mat.per = P.mat[isClass,]
-  
-  # number of obs. for this period
-  n = nrow(P.mat.per)
-  
-  # filter non-zero amounts (set as NAs) and NAs
-  P.int = matrix(NA,nrow=n,ncol=p)
-  is.Prec = P.mat.per>th&!is.na(P.mat.per)
-  P.int[is.Prec] = P.mat.per[is.Prec]
-  
-  # fit marginal distributions of amounts
-  parMargin = fit.margin.cdf(P.int,typeMargin,xiHatClass)
-  
-  # return
-  return(parMargin)
-}
-
-#==============================================================================
-#' fit.margin.cdf
-#'
-#' estimate parameters which control the marginal distribution of precipitation amounts
-#' 
-#' @param P precipitation matrix
-#' @param typeMargin type of marginal distribution: 'EGPD' or 'mixExp'
-#' @param xiHat vector of xi (p x 1) estimates for the 'EGPD' distribution. If NULL, it is set to 0.05
-#'
-#' @return \item{matrix}{matrix of estimates p x 3}
-#'
-#' @author Guillaume Evin
-fit.margin.cdf = function(P,typeMargin=c('EGPD','mixExp'),xiHat){
-  # number of stations
-  p = ncol(P)
-
-  # prepare output
-  list.out = matrix(nrow=p,ncol=3)
-
-  if(typeMargin == 'EGPD'){
-    #  Applies Extented GPD
-    for(i.st in 1:p){
-      P.st = P[,i.st]
-      P.nz = P.st[!is.na(P.st)]
-      xiHat.st = ifelse(is.null(xiHat),0.05,xiHat[i.st])
-      list.out[i.st,] = EGPD.fit.PWM.cst(P.nz,xiHat.st)$x
-    }
-  }else if(typeMargin == 'mixExp'){
-    #  Applies mixture of exponentials
-    for(i.st in 1:p){
-      P.st = P[,i.st]
-      P.nz = P.st[!is.na(P.st)]
-      list.out[i.st,] = Renext::EM.mixexp(P.nz)$estimate[c(1,3,4)]
-    }
-  }
-
-  # return matrix of estimates
-  return(list.out)
-}
-
-
-#==============================================================================
 #' unif.to.prec
 #'
 #' from uniform variates to precipitation variates
 #' 
 #' @param pI vector of parameters
 #' @param U vector of uniform variates
-#' @param typeMargin type of marginal distribution: 'EGPD' or 'mixExp'
 #'
 #' @return \item{matrix}{matrix of estimates p x 3}
 #'
 #' @author Guillaume Evin
-unif.to.prec = function(pI,U,typeMargin){
+unif.to.prec = function(pI,U){
   # inverse-cdf
-  if(typeMargin == 'EGPD'){
-    prec.sim = qEGPD.GI(U,pI[1],pI[2],pI[3])
-  }else if(typeMargin == 'mixExp'){
-    prec.sim = as.vector(Renext::qmixexp2(U,pI[1],pI[2],pI[3]))
-  }else{
-    stop("unif.to.prec: unknown distribution")
-  }
-
+  prec.sim = qEGPD.GI(U,pI[1],pI[2],pI[3])
   return(prec.sim)
 }
 
@@ -1505,17 +1501,19 @@ unif.to.prec = function(pI,U,typeMargin){
 #' 22 (1): 655–672. doi.org/10.5194/hess-22-655-2018.
 #'
 #' @param objGwexObs object of class \code{\linkS4class{GwexObs}}
+#' @param parMargin list of matrices: for each element of the list (class), a matrix nStation x 3 of pre-estimated EGPD parameters
+#' @param coord matrix nStation x 2 of coordinates
 #' @param listOption  list with the following fields:
 #' \itemize{
 #'   \item \strong{th}: threshold value in mm above which precipitation observations are considered to be non-zero (=0.2 by default)
 #'   \item \strong{nLag}: order of he Markov chain for the transitions between dry and wet states (=2 by default)
-#'   \item \strong{typeMargin}: 'EGPD' (Extended GPD) or 'mixExp' (Mixture of Exponentials). 'EGPD' by default
-#'   \item \strong{xiHat}: pre-determined values for the xi parameters of the EGPD distribution on prec. amounts
 #'   \item \strong{copulaInt}: 'Gaussian' or 'Student': type of dependence for amounts (='Student' by default)
 #'   \item \strong{isMAR}: logical value, do we apply a Autoregressive Multivariate Autoregressive model (order 1) =TRUE by default
 #'   \item \strong{is3Damount}: logical value, do we apply the model on 3D-amount. =FALSE by default
 #'   \item \strong{nChainFit}: integer, length of the runs used during the fitting procedure. =100000 by default
 #'   \item \strong{nCluster}: integer, number of clusters which can be used for the parallel computation
+#'   \item \strong{isParallel}: logical indicating the parallel computation
+#'   \item \strong{minConcDays}: minimum number of concomittant days for each pair of stations
 #' }
 #' @param vecClass vector of characters indicating the class for each date (season / month / weather type) 
 #'
@@ -1534,19 +1532,19 @@ unif.to.prec = function(pI,U,typeMargin){
 #' In \code{parInt}, we have:
 #'
 #' \itemize{
-#'  \item \strong{parMargin}: Matrices nStation x nPar of parameters for the marginal distributions.
+#'  \item \strong{parMargin}: list of matrices nStation x nPar of parameters for the marginal distributions (one element per Class).
 #'   \item \strong{cor.int}: Matrices nStation x nStation \eqn{M_0}, \eqn{A}, \eqn{\Omega_Z} representing 
 #'   the spatial and temporal correlations between all the stations (see Evin et al., 2018). For the 
 #'   Student copula, \code{dfStudent} indicates the \eqn{\nu} parameter.
 #'   }
 #' @author Guillaume Evin
-fit.GWex.prec = function(objGwexObs,listOption=NULL,vecClass=NULL){
-
+fit.GWex.prec = function(objGwexObs,coord,parMargin,listOption=NULL,vecClass=NULL){
+  
   # get/check options
   listOption = get.listOption(listOption)
-
+  
   ######### Retrieve observations and dates ##########
-
+  
   if(listOption$is3Damount){
     # Precipitation matrix (cumulated amounts on 3 days)
     P.1D = objGwexObs@obs
@@ -1565,7 +1563,9 @@ fit.GWex.prec = function(objGwexObs,listOption=NULL,vecClass=NULL){
     # Time resolution
     dayScale = 1
   }
-
+  
+  ######### build / retrieve classes ##########
+  
   if(is.null(vecClass)){
     # vector of months for all dates
     vec.month = as.numeric(strftime(vec.dates, "%m"))
@@ -1595,10 +1595,19 @@ fit.GWex.prec = function(objGwexObs,listOption=NULL,vecClass=NULL){
   
   # number of stations
   p = ncol(P.mat)
-
+  
+ # euclidian distances between each pair of stations
+  mat.distance = matrix(nrow = p, ncol = p)
+  for(i in 1:p){
+    for(j in 1:p){
+      mat.distance[i,j] = sqrt((coord[i,1]-coord[j,1])^2 + (coord[i,2]-coord[j,2])^2)  
+    }
+  }
+  
+  
   ######### prepare results ##########
   list.pr.state = list.parMargin = list.mat.omega = list.par.dep.amount = list()
-
+  
   # prepare parallelization
   if(listOption$isParallel){
     cl <- parallel::makeCluster(listOption$nCluster)
@@ -1629,23 +1638,16 @@ fit.GWex.prec = function(objGwexObs,listOption=NULL,vecClass=NULL){
     #-------------------------------------------
     # parameters of the marginal distributions
     #-------------------------------------------
-    if(is.null(listOption$xiHat)){
-      xiHatClass = NULL
-    }else{
-      xiHatClass = listOption$xiHat[[classChar]]
-      if(is.null(xiHatClass)){
-        warning(paste0("xiHatClass is NULL for period ",classChar,", check listOption$xiHat"))
-      }
-    }
-    parMargin = infer.parMarginal(P.mat,isClass,listOption$th,listOption$typeMargin,xiHatClass)
-    list.parMargin[[classChar]] = parMargin
+    parMargin.class = parMargin[[classChar]]
+    list.parMargin[[classChar]] = parMargin.class
     
     
     #-------------------------------------------
     # - spatial process for wet.dry states
     #-------------------------------------------
     infer.mat.omega.out = infer.mat.omega(P.mat,isClass,listOption$th,listOption$nLag,
-                                          pr.state,listOption$nChainFit,listOption$isParallel)
+                                          pr.state,listOption$nChainFit,
+                                          listOption$isParallel,listOption$minConcDays,mat.distance)
     list.mat.omega[[classChar]] = infer.mat.omega.out
     
     
@@ -1653,21 +1655,21 @@ fit.GWex.prec = function(objGwexObs,listOption=NULL,vecClass=NULL){
     # - spatial process for positive intensities
     #-------------------------------------------
     infer.dep.amount.out = infer.dep.amount(P.mat,isClass,infer.mat.omega.out,
-                                            listOption$nLag,listOption$th,listOption$typeMargin,parMargin,
+                                            listOption$nLag,listOption$th,parMargin.class,
                                             listOption$nChainFit,listOption$isMAR,listOption$copulaInt,
-                                            listOption$isParallel)
+                                            listOption$isParallel,listOption$minConcDays,mat.distance)
     list.par.dep.amount[[classChar]] = infer.dep.amount.out
   }
-
+  
   if(listOption$isParallel){
     parallel::stopCluster(cl)
   }
-
+  
   # return a list of all the parameters
   listPar = list(parOcc=list(list.pr.state=list.pr.state,list.mat.omega=list.mat.omega),
                  parInt=list(cor.int=list.par.dep.amount,parMargin=list.parMargin),
                  p=p,class=vecClassChar)
-
+  
   # return options and estimated parameters
   return(list(listOption=listOption,listPar=listPar))
 }
@@ -1753,32 +1755,32 @@ disag.3D.to.1D = function(Yobs, # matrix of observed intensities at 24h: (nTobs*
 sim.GWex.occ = function(objGwexFit,vecClass){
   # number of stations
   p = getNbStations(objGwexFit)
-
+  
   # number of days for the transition probas
   nLag = objGwexFit@fit$listOption$nLag
-
+  
   # length of the time series generated
   n = length(vecClass)
-
+  
   # prepare simulation occurrence
   Xt = rndNorm = array(0,dim=c(n,p))
-
+  
   # number of possible transitions
   n.comb = 2^nLag
-
+  
   # parameters for the occurrence process
   parOcc = objGwexFit@fit$listPar$parOcc
-
+  
   # a matrix of possible combination n.comb x nLag
   mat.comb = as.matrix(parOcc$list.pr.state[[1]][[1]][,1:nLag])
-
+  
   # initialise array of transitions (Gaussian quantiles)
   Qtrans = array(0,dim=c(n,p,n.comb))
-
+  
   for(t in 1:n){
     # filter
     cc = vecClass[t]
-
+    
     # prob / normal quantiles of transitions
     Ptrans.list = lapply(parOcc$list.pr.state[[cc]],'[',nLag+1)
     Qtrans.list = lapply(Ptrans.list,function(x) qnorm(unlist(x)))
@@ -1789,12 +1791,12 @@ sim.GWex.occ = function(objGwexFit,vecClass){
         Qtrans[t,i.st,i.comb] = Qtrans.mat[i.st,i.comb]
       }
     }
-
+    
     # generate multivariate gaussian
     rndNorm[t,] = MASS::mvrnorm(1,rep(0,p),parOcc$list.mat.omega[[cc]]$mat.omega)
   }
-
-
+  
+  
   # Start simulation
   for(t in (nLag+1):n){
     for(st in 1:p){
@@ -1804,7 +1806,7 @@ sim.GWex.occ = function(objGwexFit,vecClass){
       Xt[t,st] = (rndNorm[t,st]<=qTr)
     }
   }
-
+  
   return(Xt)
 }
 
@@ -1822,7 +1824,7 @@ sim.GWex.occ = function(objGwexFit,vecClass){
 sim.GWex.Yt.Pr.get.param = function(objGwexFit,classChar){
   # extract relevant parameters
   fitParCorIntclassChar = objGwexFit@fit$listPar$parInt$cor.int[[classChar]]
-
+  
   # return results
   return(fitParCorIntclassChar)
 }
@@ -1869,7 +1871,7 @@ sim.Zt.MAR = function(PAR,copulaInt,Zprev,p){
   # generate from the corresponding multivariate distribution
   # t-1
   Zt.prev = t(PAR$A%*%Zprev)
-
+  
   if(copulaInt=='Gaussian'){
     # generate from a multivariate Gaussian
     inno = MASS::mvrnorm(n=1, mu=rep(0,p), Sigma=PAR[['corZ']]) %*% diag(PAR[['sdZ']])
@@ -1879,7 +1881,7 @@ sim.Zt.MAR = function(PAR,copulaInt,Zprev,p){
     r.cop.t.out = matrix(pt(rmvt.out, df=PAR[['dfStudent']]), ncol = p)
     inno = qnorm(r.cop.t.out)  %*% diag(PAR[['sdZ']])
   }
-
+  
   # return MAR(1)
   return(Zt.prev + inno)
 }
@@ -1900,23 +1902,23 @@ sim.GWex.Yt.Pr = function(objGwexFit,vecClass){
   # retrieve some options
   isMAR = objGwexFit@fit$listOption$isMAR
   copulaInt = objGwexFit@fit$listOption$copulaInt
-
+  
   # number of stations
   p = getNbStations(objGwexFit)
-
+  
   # length of the time series generated at the end
   n = length(vecClass)
-
+  
   # prepare matrix with Gaussian variates
   Yt.Gau = array(0,dim=c(n,p))
-
+  
   #_____________ t=1 _________________
   # for the first iteration, we simulate from the marginal multivariate distribution (no temporal dependence)
-
+  
   # retrieve period and parameters
   PAR = sim.GWex.Yt.Pr.get.param(objGwexFit,vecClass[1])
   Yt.Gau[1,] = sim.Zt.Spatial(PAR,copulaInt,p)
-
+  
   #_____________ t=2...n _____________
   for(t in 2:n){
     # retrieve period and parameters if necessary
@@ -1926,7 +1928,7 @@ sim.GWex.Yt.Pr = function(objGwexFit,vecClass){
     
     if(isMAR){
       Yt.Gau[t,] = sim.Zt.MAR(PAR,copulaInt,Yt.Gau[t-1,],p)
-
+      
       # Issue with the MAR(1) process: instability of the autoregressive process if A is nearly non-inversible
       # during the simulation process, Z values can become very large (>10)and leads to prob=1, and non-possible invers transform
       # with the marginal distributions
@@ -1937,7 +1939,7 @@ sim.GWex.Yt.Pr = function(objGwexFit,vecClass){
       Yt.Gau[t,] = sim.Zt.Spatial(PAR,copulaInt,p)
     }
   }
-
+  
   # return variates
   return(pnorm(Yt.Gau))
 }
@@ -1959,23 +1961,22 @@ sim.GWex.Yt.Pr = function(objGwexFit,vecClass){
 sim.GWex.Yt = function(objGwexFit,vecClass,Yt.Pr){
   # number of stations
   p = getNbStations(objGwexFit)
-
+  
   # length of the simulated period: necessarily related to Yt.Pr
   n = nrow(Yt.Pr)
-
+  
   # prepare simulation pluies
   Yt = array(0,dim=c(n,p))
-
+  
   # marginal distributions
-  typeMargin = objGwexFit@fit$listOption$typeMargin
   parMargin = objGwexFit@fit$listPar$parInt$parMargin
-
+  
   # Start simulation
   for(cc in objGwexFit@fit$listPar$class){
     # filter
     isClass = vecClass==cc
     nClass = sum(isClass)
-
+    
     # pour chaque station
     for(st in 1:p){
       # days for this period as matrix indices
@@ -1983,10 +1984,10 @@ sim.GWex.Yt = function(objGwexFit,vecClass,Yt.Pr){
       # intensities
       pI = parMargin[[cc]][st,]
       # inverse-cdf
-      Yt[i.mat] = unif.to.prec(pI,Yt.Pr[i.mat],typeMargin)
+      Yt[i.mat] = unif.to.prec(pI,Yt.Pr[i.mat])
     }
   }
-
+  
   return(Yt)
 }
 
@@ -2005,13 +2006,13 @@ sim.GWex.Yt = function(objGwexFit,vecClass,Yt.Pr){
 mask.GWex.Yt = function(Xt,Yt){
   # number of stations
   p = ncol(Xt)
-
+  
   # length of the time series generated
   n = nrow(Xt)
-
+  
   # prepare simulation pluies
   Pt = array(0,dim=c(n,p))
-
+  
   # pour chaque station
   for(st in 1:p){
     # wet days of this period as matrix indices
@@ -2021,7 +2022,7 @@ mask.GWex.Yt = function(Xt,Yt){
     # mask intensities
     Pt[i.mat] = Yt[i.mat]
   }
-
+  
   return(Pt)
 }
 
@@ -2044,10 +2045,10 @@ mask.GWex.Yt = function(Xt,Yt){
 sim.GWex.prec.1it = function(objGwexFit,vecDates,vecClass,myseed,objGwexObs,prob.class){
   # set seed of random generation
   set.seed(myseed)
-
+  
   # do we simulate 3-day period
   is3Damount = objGwexFit@fit$listOption$is3Damount
-
+  
   # tweak vector of dates
   if(is3Damount){
     n.orig = length(vecDates)
@@ -2058,25 +2059,25 @@ sim.GWex.prec.1it = function(objGwexFit,vecDates,vecClass,myseed,objGwexObs,prob
     vecDates = vecDates[seq(from=1,to=n,by=3)]
     mSimAgg = month2season(as.numeric(format(vecDates,'%m')))
   }
-
+  
   # Simulation of occurrences
   Xt = sim.GWex.occ(objGwexFit,vecClass)
-
+  
   # Simulation of the spatial and temporal dependence between amounts
   Yt.Pr = sim.GWex.Yt.Pr(objGwexFit,vecClass)
-
+  
   # We obtain directly related intensities
   Yt = sim.GWex.Yt(objGwexFit,vecClass,Yt.Pr)
-
+  
   # if we simulate 3-day periods, we disaggregate these periods, otherwise, we just mask the intensities
   # with the simulated occurrences
   if(is3Damount){
     # Time resolution
     dayScale = 3
-
+    
     # mask simulated intensities with the occurrences Xt
     simAgg = mask.GWex.Yt(Xt,Yt)
-
+    
     ### we need the observations to find observed 3-day structure of precipitation
     ### we first process observations: (aggregate; get months)
     #  get obs
@@ -2093,7 +2094,7 @@ sim.GWex.prec.1it = function(objGwexFit,vecDates,vecClass,myseed,objGwexObs,prob
     # mask with the occurrences Xt
     Pt = mask.GWex.Yt(Xt,Yt)
   }
-
+  
   # return results
   return(Pt)
 }

@@ -398,9 +398,8 @@ is.GwexFit <- function(obj) is(obj, 'GwexFit')
 #' # Format observations: create a G-Wex object
 #' myObsPrec = GwexObs(variable='Prec',date=vecDates,obs=dailyPrecipGWEX[,1:2])
 #'
-#' # Example of a data.frame which can be used for 'xiHat'. For each month, xi values 
-#' # can be prescribed, for example using a regionalisation method.
-#' xiReg = data.frame(station=c('S1','S2'),DJFMAM=c(0,0.06),JJASON=c(0,0.14))
+#' # parMargin: list with one element per class, with a matrix nStation x 3
+#' parMargin = list(DJFMAM=rbind(c(1,1,0),c(1,1,0)),JJASON=rbind(c(1,1,1),c(1,1,0)))
 #'
 #' # Options: specify the threshold for precipitation (0.5 mm) to distinguish wet and 
 #' # dry states (th), xi values for the DGPD distribution (xiHat), a Student copula for 
@@ -418,9 +417,9 @@ is.GwexFit <- function(obj) is(obj, 'GwexFit')
 #' vecClass[vec.month%in%c(6,7,8,9,10,11)] = "JJASON"
 #'
 #' # Fit precipitation model
-#' # myParPrec = fitGwexModel(myObsPrec,list.options) # fit model
+#' # myParPrec = fitGwexModel(myObsPrec,coord, parMargin, list.options, vecClass)) # fit model
 #' # myParPrec # print object
-fitGwexModel <- function(objGwexObs,listOption=NULL,vecClass=NULL){
+fitGwexModel <- function(objGwexObs,coord,parMargin,listOption=NULL,vecClass=NULL){
   if(!is.GwexObs(objGwexObs)) stop('GwexFit: argument must be a GwexObs object')
   
   # type of variable
@@ -438,7 +437,7 @@ fitGwexModel <- function(objGwexObs,listOption=NULL,vecClass=NULL){
   
   # call general constructor and fitting function
   print("Fit generator")
-  objGwexFit <- GwexFit(variable=typeVar,fit = fit.GWex.prec(objGwexObs,listOption,vecClass),p=p)
+  objGwexFit <- GwexFit(variable=typeVar,fit = fit.GWex.prec(objGwexObs,coord,parMargin,listOption,vecClass),p=p)
   
   return(objGwexFit)
 }
