@@ -20,7 +20,7 @@
 #
 # @author Guillaume Evin
 get.version.GWex = function(){
-  return('v1.0.0')
+  return('v1.2.0')
 }
 
 
@@ -30,7 +30,7 @@ get.version.GWex = function(){
 #' Defines a generic \code{\linkS4class{Gwex}} object.
 #' GWex objects contain two slots:
 #' - the version ('vX.X.X')
-#' - the type of variable ('Prec')
+#' - the type of variable ('Prec' or 'Temp')
 #'
 #' @name Gwex-class
 #' @rdname Gwex-class
@@ -52,8 +52,8 @@ setClass(
   
   # integrity checks
   validity=function(object){
-    if(!(object@variable %in% c('Prec'))){
-      return("variable must be Prec")
+    if(!(object@variable %in% c('Prec','Temp'))){
+      return("variable must be Prec or Temp")
     }else{
       return(TRUE)
     }
@@ -123,15 +123,18 @@ myShowGwex =  function(object){
 #' @aliases print,Gwex-method
 #' @param x \code{\linkS4class{Gwex}} object
 #' @examples
-#' # Format dates corresponding to daily observations of precipitation
+#' # Format dates corresponding to daily observations of precipitation and temperature
 #' vecDates = seq(from=as.Date("01/01/2005",format="%d/%m/%Y"),
 #' to=as.Date("31/12/2014",format="%d/%m/%Y"),by='day')
 #' 
 #' # build GwexObs object with temperature data
-#' myObsPrec = GwexObs(variable='Prec',date=vecDates,obs=dailyPrecipGWEX)
+#' myObsTemp = GwexObs(variable='Temp',date=vecDates,obs=dailyTemperGWEX)
 #' 
 #' # print GwexObs object
-#' myObsPrec
+#' myObsTemp
+#' 
+#' # print GwexFit object
+#' myParPrecGWEX 
 setMethod ("print",signature("Gwex"),
            function(x){
              myShowGwex(x)
@@ -148,12 +151,14 @@ setMethod ("print",signature("Gwex"),
 #' to=as.Date("31/12/2014",format="%d/%m/%Y"),by='day')
 #' 
 #' # build GwexObs object with temperature data
-#' myObsPrec = GwexObs(variable='Prec',date=vecDates,obs=dailyPrecipGWEX)
+#' myObsTemp = GwexObs(variable='Temp',date=vecDates,obs=dailyTemperGWEX)
 #' 
 #' # show GwexObs object
-#' myObsPrec 
+#' myObsTemp
+#' 
+#' # show GwexFit object
+#' myParPrecGWEX 
 setMethod ("show",signature("Gwex"),myShowGwex)
-
 
 #==============================================================================
 # Method getNbStations: Create a method to get the number of stations.
@@ -363,19 +368,34 @@ is.GwexFit <- function(obj) is(obj, 'GwexFit')
 #' @export
 #'
 #' @param objGwexObs an object of class \code{\linkS4class{GwexObs}}
+#' @param coord (not required for temperature) matrix nStation x 2 indicating the xy coordinates of the stations
+#' @param parMargin (not required for temperature) list with two levels parMargin[[iM]][[iWT]] where
+#' the iM indicating a month (1...12) and iWT indicates a weather type (integer), each element contains a 
+#' matrix nStation x 3 of pre-estimated EGPD parameters
 #' @param listOption a list with the following fields:
 #' \itemize{
 #'   \item \strong{th}: threshold value in mm above which precipitation observations are considered to be non-zero (=0.2 by default)
-#'   \item \strong{nLag}: order of the Markov chain for the transitions between dry and wet states (=2 by default)
-#'   \item \strong{typeMargin}: 'EGPD' (Extended GPD) or 'mixExp' (Mixture of Exponentials). 'EGPD' by default
-#'   \item \strong{xiHat}: pre-determined values for the xi parameters of the EGPD distribution on precipitation amounts
+#'   \item \strong{nLag}: order of he Markov chain for the transitions between dry and wet states (=2 by default)
 #'   \item \strong{copulaInt}: 'Gaussian' or 'Student': type of dependence for amounts (='Student' by default)
 #'   \item \strong{isMAR}: logical value, do we apply a Autoregressive Multivariate Autoregressive model (order 1) =TRUE by default
 #'   \item \strong{is3Damount}: logical value, do we apply the model on 3D-amount. =FALSE by default
-#'   \item \strong{nChainFit}: integer, length of the runs which are generated during the fitting procedure. =100000 by default
+#'   \item \strong{nChainFit}: integer, length of the runs used during the fitting procedure. =100000 by default
 #'   \item \strong{nCluster}: integer, number of clusters which can be used for the parallel computation
+#'   \item \strong{isParallel}: logical indicating the parallel computation
+#'   \item \strong{minConcDays}: minimum number of concomittant days for each pair of stations
 #' }
 #'
+#' and for temperature, a list with the following fields:
+#' \itemize{
+#'   \item \strong{hasTrend}: logical value, do we fit a linear trend for the long-term change, =FALSE by default
+#'   \item \strong{objGwexPrec}: object of class \code{\linkS4class{GwexObs}} containing precipitation observations. If provided, we assume 
+#'   that temperature must be modelled and simulated according to the precipitation states 'dry' and 'wet'. For each state, a seasonal cycle is fitted (mean and sd).
+#'   \item \strong{typeMargin}: 'SGED' (default) or 'Gaussian': type of marginal distribution.
+#'   \item \strong{depStation}: 'MAR1' (default) or 'Gaussian': MAR1 (Multivariate Autoregressive model order 1) for the spatial and temporal dependence or 'Gaussian' 
+#'   for the spatial dependence only.
+#' }
+#' @param vecWT vector n x 1 of integers indicating the WT for each date
+#' 
 #' @return Return an object of class \code{\linkS4class{GwexFit}} with:
 #' \itemize{
 #'   \item \strong{p}: The number of station,
@@ -383,7 +403,6 @@ is.GwexFit <- function(obj) is(obj, 'GwexFit')
 #'   \item \strong{variable}: the type of variable,
 #'   \item \strong{fit}: a list containing the list of options \code{listOption} and the list of estimated parameters \code{listPar}.
 #' }
-#' @param vecClass vector of class (char)
 #' 
 #' @author Guillaume Evin
 #' @examples
@@ -399,7 +418,16 @@ is.GwexFit <- function(obj) is(obj, 'GwexFit')
 #' myObsPrec = GwexObs(variable='Prec',date=vecDates,obs=dailyPrecipGWEX[,1:2])
 #'
 #' # parMargin: list with one element per class, with a matrix nStation x 3
-#' parMargin = list(DJFMAM=rbind(c(1,1,0),c(1,1,0)),JJASON=rbind(c(1,1,1),c(1,1,0)))
+#' parMargin.oneClass = rbind(c(1,1,1),c(1,1,0))
+#' parMargin = list()
+#' for(iMonth in 1:12){
+#' parMargin[[iMonth]] = list()
+#' for(iWT in 1:3){
+#' parMargin[[iMonth]][[iWT]] = parMargin.oneClass
+#' }
+#' }
+#' # coord: nStation x 2 (xy coordinates)
+#' coord = cbind(c(0,1),c(0,1))
 #'
 #' # Options: specify the threshold for precipitation (0.5 mm) to distinguish wet and 
 #' # dry states (th), xi values for the DGPD distribution (xiHat), a Student copula for 
@@ -408,18 +436,28 @@ is.GwexFit <- function(obj) is(obj, 'GwexFit')
 #' # ('typeMargin'), and 200 replicates for the runs used during the fitting process
 #' # (this value being 100,000 by default, in order to obtain a reasonable precision of the 
 #' # estimates) 
-#' list.options = list(th=0.5,nLag=1,xiHat=xiReg,copulaInt='Student',is3Damount=TRUE,isMAR=TRUE,
-#'                    typeMargin='EGPD',nChainFit=200,isParallel=FALSE)
+#' listOption = list(th=0.5,nLag=1,copulaInt='Gaussian',is3Damount=FALSE,isMAR=FALSE,
+#' nChainFit=1000,isParallel=TRUE,nCluster=10,minConcDays=0)
 #'
 #' vec.month = as.numeric(strftime(vecDates, "%m"))
-#' vecClass = vector(length=length(vec.month))
-#' vecClass[vec.month%in%c(12,1,2,3,4,5)] = "DJFMAM"
-#' vecClass[vec.month%in%c(6,7,8,9,10,11)] = "JJASON"
+#' vecWT = sample(1:3,length(vecDates),replace=TRUE)
 #'
 #' # Fit precipitation model
-#' # myParPrec = fitGwexModel(myObsPrec,coord, parMargin, list.options, vecClass)) # fit model
-#' # myParPrec # print object
-fitGwexModel <- function(objGwexObs,coord,parMargin,listOption=NULL,vecClass=NULL){
+#' myParPrec = fitGwexModel(myObsPrec,coord,parMargin,listOption,vecWT) # fit model
+#' myParPrec # print object
+#'
+#' ###############################################################
+#' #     FIT THE TEMPERATURE MODEL, COND. TO PRECIPITATION
+#' ###############################################################
+#' # Format observations: create a G-Wex object
+#' myObsTemp = GwexObs(variable='Temp',date=vecDates,obs=dailyTemperGWEX)
+#' 
+#' # Fit temperature model with a long-term linear trend ('hasTrend'), Gaussian margins 
+#' # ('typeMargin') and Gaussian spatial dependence ('depStation')
+#' myParTemp = fitGwexModel(myObsTemp,listOption=list(hasTrend=TRUE,typeMargin='Gaussian',
+#' depStation='Gaussian'))
+#' myParTemp # print object
+fitGwexModel <- function(objGwexObs,coord=NULL,parMargin=NULL,listOption=NULL,vecWT=NULL){
   if(!is.GwexObs(objGwexObs)) stop('GwexFit: argument must be a GwexObs object')
   
   # type of variable
@@ -428,16 +466,20 @@ fitGwexModel <- function(objGwexObs,coord,parMargin,listOption=NULL,vecClass=NUL
   # number of stations
   p = getNbStations(objGwexObs)
   
-  # vecClass
-  if(!is.null(vecClass)){
-    if(length(vecClass)!=length(objGwexObs@date)){
-      stop("vecClass must be of the same length as observations (i.e. they must correspond to the same dates")
+  # vecWT
+  if(!is.null(vecWT)){
+    if(length(vecWT)!=length(objGwexObs@date)){
+      stop("vecWT must be of the same length as observations (i.e. they must correspond to the same dates")
     }
   }
   
   # call general constructor and fitting function
   print("Fit generator")
-  objGwexFit <- GwexFit(variable=typeVar,fit = fit.GWex.prec(objGwexObs,coord,parMargin,listOption,vecClass),p=p)
+  if(typeVar == 'Prec'){
+    objGwexFit <- GwexFit(variable=typeVar,fit = fit.GWex.prec(objGwexObs,coord,parMargin,listOption,vecWT),p=p)
+  }else if(typeVar == 'Temp'){
+    objGwexFit <- GwexFit(variable=typeVar,fit = fit.GWex.temp(objGwexObs,listOption),p=p)
+  }
   
   return(objGwexFit)
 }
@@ -468,16 +510,27 @@ setMethod(f="getNbStations",
 myShowGwexFit = function(obj){
   cat("\n")
   
-  opt = obj@fit$listOption
-  cat("#### Options for the occurrence process ####\n")
-  cat(paste0("threshold: ",opt$th),"\n")
-  cat(paste0("order of the Markov chain: ",opt$nLag),"\n")
-  cat("\n")
-  cat("#### Options for the amount process ####\n")
-  cat(paste0("given values for Xi: ",!is.null(opt$xiHat)),"\n")
-  cat(paste0("spatial dependence: ",opt$copulaInt," copula"),"\n")
-  cat(paste0("apply a MAR(1) process: ",opt$isMAR),"\n")
-  cat(paste0("apply a master Markov chain: ",opt$isState),"\n")
+  if(getTypeVar(obj)=='Prec'){
+    opt = obj@fit$listOption
+    cat("#### Options for the occurrence process ####\n")
+    cat(paste0("threshold: ",opt$th),"\n")
+    cat(paste0("order of the Markov chain: ",opt$nLag),"\n")
+    cat("\n")
+    cat("#### Options for the amount process ####\n")
+    cat(paste0("spatial dependence: ",opt$copulaInt," copula"),"\n")
+    cat(paste0("apply a MAR(1) process: ",opt$isMAR),"\n")
+  }else if(getTypeVar(obj)=='Temp'){
+    opt = obj@fit$listOption
+    if(opt$hasTrend){
+      cat("A linear trend models the long-term non-stationarity of daily temperature data\n")
+    }
+    cat("#### Options for the temperature model ####\n")
+    cat(paste0('Fit a ',opt$typeMargin,' distribution on margins\n'))
+    cat(paste0('Use ',opt$depStation,' option for the temporal and spatial dependence\n'))
+    if(opt$condPrec){
+      cat("Temperature data are fitted conditionally to precipitation states 'dry' and 'wet'")
+    }
+  }
 }
 
 
@@ -532,7 +585,7 @@ setClass(
 
 # Constructor of class [\code{\linkS4class{GwexSim}}]
 # @title Constructor
-# @param variable 'Prec'
+# @param variable 'Prec' or 'Temp'
 # @param listOption list of options
 # @param date vector of dates
 # @param sim array of simulated values
@@ -569,9 +622,10 @@ is.GwexSim <- function(obj) is(obj, 'GwexSim')
 #' @param objGwexFit an object of class \code{\linkS4class{GwexFit}}
 #' @param nb.rep number of repetitions of scenarios
 #' @param vecDates vector of continuous dates
-#' @param vecClass vector of classification (char) of the same length as vecDates
+#' @param vecWT vector of integer indicating weather types
 #' @param objGwexObs optional: an object of class \code{\linkS4class{GwexObs}} if we need the observations to simulate (disaggregation prec 3D -> 1D)
 #' @param prob.class vector of probabilities indicating class of "similar" mean intensities
+#' @param objGwexSim optional: an object of class \code{\linkS4class{GwexSim}} if we need simulations to simulate (temp conditional to prec)
 #' @param nCluster optional, number of clusters which can be used for the parallel computation
 #'
 #' @return \item{GwexSim}{an object of class \code{\linkS4class{GwexSim}}. Contains sim (3D-array with the simulations) and a vector of dates}
@@ -582,30 +636,61 @@ is.GwexSim <- function(obj) is(obj, 'GwexSim')
 #' vecDates = seq(from=as.Date("01/01/2005",format="%d/%m/%Y"),
 #' to=as.Date("31/12/2014",format="%d/%m/%Y"),by='day')
 #' 
-#' vecClass = vector(length=length(vecDates))
-#' vecMonth = as.numeric(strftime(vecDates, "%m"))
-#' vecClass[vecMonth%in%c(12,1,2)] = "DJF"
-#' vecClass[vecMonth%in%c(3,4,5)] = "MAM"
-#' vecClass[vecMonth%in%c(6,7,8)] = "JJA"
-#' vecClass[vecMonth%in%c(9,10,11)] = "SON"
-#' 
 #' ###############################################################
 #' #               FIT AND SIMULATE FROM THE PRECIPITATION MODEL
 #' ###############################################################
 #' # Format observations: create a G-Wex object
 #' myObsPrec = GwexObs(variable='Prec',date=vecDates,obs=dailyPrecipGWEX[,1:2])
 #'
-#' # default options except for 'nChainFit'
-#' list.options = list(nChainFit=1000)
-#' 
+#'
+#' # parMargin: list with one element per class, with a matrix nStation x 3
+#' parMargin.oneClass = rbind(c(1,1,1),c(1,1,0))
+#' parMargin = list()
+#' for(iMonth in 1:12){
+#' parMargin[[iMonth]] = list()
+#' for(iWT in 1:3){
+#' parMargin[[iMonth]][[iWT]] = parMargin.oneClass
+#' }
+#' }
+#' # coord: nStation x 2 (xy coordinates)
+#' coord = cbind(c(0,1),c(0,1))
+#'
+#' # Options: specify the threshold for precipitation (0.5 mm) to distinguish wet and 
+#' # dry states (th), xi values for the DGPD distribution (xiHat), a Student copula for 
+#' # the spatial dependence (copulaInt), a model based on 3-day aggregated values 
+#' # (is3Damount), a MAR(1) process (isMAR), a EGPD distribution for marginal intensities
+#' # ('typeMargin'), and 200 replicates for the runs used during the fitting process
+#' # (this value being 100,000 by default, in order to obtain a reasonable precision of the 
+#' # estimates) 
+#' listOption = list(th=0.5,nLag=1,copulaInt='Gaussian',is3Damount=FALSE,isMAR=FALSE,
+#' nChainFit=1000,isParallel=TRUE,nCluster=10,minConcDays=0)
+#'
+#' vec.month = as.numeric(strftime(vecDates, "%m"))
+#' vecWT = sample(1:3,length(vecDates),replace=TRUE)
+#'
 #' # Fit precipitation model
-#' # myParPrec = fitGwexModel(myObsPrec,list.options) # fit model
+#' myParPrec = fitGwexModel(myObsPrec,coord,parMargin,listOption,vecWT) # fit model
 #'
 #' # generate 2 scenarios for one year, using a existing 'GwexFit' object
-#' # mySimPrec = simGwexModel(objGwexFit=myParPrec, nb.rep=2, vecDates, vecClass)
-#' # mySimPrec # print object
-simGwexModel <- function(objGwexFit, nb.rep = 10, vecDates, vecClass,
-                         objGwexObs=NULL, prob.class=c(0.5,0.75,0.9,0.99), nCluster=1){
+#' mySimPrec = simGwexModel(objGwexFit=myParPrec, nb.rep=2, vecDates, vecWT)
+#' mySimPrec # print object
+#'
+#' ###############################################################
+#' #     FIT AND SIMULATE FROM THE TEMPERATURE MODEL, COND. TO PRECIPITATION
+#' ###############################################################
+#' # Format observations: create a G-Wex object
+#' myObsTemp = GwexObs(variable='Temp',date=vecDates,obs=dailyTemperGWEX)
+#' 
+#' # Fit temperature model with a long-term linear trend ('hasTrend'), Gaussian margins 
+#' # ('typeMargin') and Gaussian spatial dependence ('depStation')
+#' myParTemp = fitGwexModel(myObsTemp,listOption=list(hasTrend=TRUE,typeMargin='Gaussian',
+#' depStation='Gaussian'))
+#' 
+#' # generate 2 scenarios for one year, using a existing 'GwexFit' object
+#' mySimTemp = simGwexModel(objGwexFit=myParTempGWEX, nb.rep=2, vecDates)
+#' mySimTemp # print object
+simGwexModel <- function(objGwexFit, nb.rep = 10, vecDates, vecWT=NULL,
+                         objGwexObs=NULL, prob.class=c(0.5,0.75,0.9,0.99),objGwexSim=NULL,nCluster=1){
   # check objGwexFit
   if(!is.GwexFit(objGwexFit)) stop('objGwexFit: objGwexFit argument must be a GwexFit object')
   
@@ -617,7 +702,24 @@ simGwexModel <- function(objGwexFit, nb.rep = 10, vecDates, vecClass,
   
   # number of dates
   n = length(vecDates)
-  if(length(vecClass)!=n) stop("vecClass and vecDates must have the same length")
+  
+  # check vecWT for Prec
+  if(typeVar=="Prec"){
+    if(length(vecWT)!=n) stop("vecWT and vecDates must have the same length")
+  }
+  
+  # if we simulate temperature, is the model conditional to precipitation?
+  if(typeVar=='Temp'){
+    condPrec = objGwexFit@fit$listOption$condPrec
+    
+    #  if this is the case, we use the characteristics of the prec. sim
+    if(condPrec){
+      if(is.null(objGwexSim)|(!is.GwexSim(objGwexSim))) stop('simGwexModel: we need a objGwexSim object')
+      vecDates = objGwexSim@date
+      simPrec = objGwexSim@sim
+      nb.rep = dim(simPrec)[3]
+    }
+  }
   
   # prepare parallelization
   print("Generate scenarios")
@@ -628,8 +730,18 @@ simGwexModel <- function(objGwexFit, nb.rep = 10, vecDates, vecClass,
   # simulate from GWex model
   iSim = NULL
   sim.GWex.out <- foreach(iSim=1:nb.rep, .combine='acomb', .multicombine=TRUE) %dopar% {
-    sim.GWex.1it = sim.GWex.prec.1it(objGwexFit,vecDates,vecClass,
+    # call generating function
+    if(typeVar=='Prec'){
+      sim.GWex.1it = sim.GWex.prec.1it(objGwexFit,vecDates,vecWT,
                                      myseed=iSim,objGwexObs=objGwexObs,prob.class=prob.class)
+    }else if(typeVar=='Temp'){
+      if(condPrec){
+        matSimPrec = simPrec[,,iSim]
+      }else{
+        matSimPrec = NULL
+      }
+      sim.GWex.1it = sim.GWex.temp.1it(objGwexFit,vecDates,myseed=iSim,matSimPrec=matSimPrec)$Tdetrend
+    }
     return(sim.GWex.1it)
   }
   
@@ -648,8 +760,10 @@ simGwexModel <- function(objGwexFit, nb.rep = 10, vecDates, vecClass,
 
 
 #==============================================================================
-# @rdname getNbStations-methods
-# @aliases getNbStations,GwexSim-method
+#' getNbStations
+#'  
+#' @rdname getNbStations-methods
+#' @aliases getNbStations,GwexSim-method
 setMethod(f="getNbStations",
           signature="GwexSim",
           definition=function(theObject)
@@ -671,22 +785,6 @@ setMethod(f="getNbStations",
 myShowGwexSim = function(obj){
   cat("Generated scenarios:", "\n")
   cat("__________________", "\n", "\n")
-  
-  # print options
-  cat("#### Options for the occurrence process ####\n")
-  opt = obj@listOption
-  cat(paste0("threshold: ",opt$th),"\n")
-  cat(paste0("order of the Markov chain: ",opt$nLag),"\n")
-  cat("\n")
-  cat("#### Options for the amount process ####\n")
-  cat(paste0("given values for Xi: ",!is.null(opt$xiHat)),"\n")
-  cat(paste0("spatial dependence: ",opt$copulaInt," copula"),"\n")
-  cat(paste0("apply a MAR(1) process: ",opt$isMAR),"\n")
-  cat(paste0("apply a master Markov chain: ",opt$isState),"\n")
-  cat("\n")
-  
-  # print dimensions of simulated scenarios
-  cat("#### Simulations ####\n")
   cat(paste0("period: ",min(obj@date),' -> ',max(obj@date)),"\n")
   cat(paste0("number of scenarios: ",dim(obj@sim)[3]),"\n")
   cat(paste0("number of stations: ",getNbStations(obj),"\n"))

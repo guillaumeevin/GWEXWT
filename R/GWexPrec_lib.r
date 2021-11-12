@@ -1,8 +1,8 @@
 ###===============================###===============================###
 ### Guillaume Evin
-### 18/03/2016, Grenoble
-###  IRSTEA
-### guillaume.evin@irstea.fr
+### 08/11/2021, Grenoble
+###  INRAE-UR ETNA
+### guillaume.evin@inrae.fr
 ###
 ###  Provide utilities for the estimation and simulation of the GWex
 ### multi-site precipitation model.
@@ -55,12 +55,12 @@ wet.day.frequency = function(mat.prec, # matrix of precipitation
 #==============================================================================
 #' lag.trans.proba.vector.byClass
 #'
-#' Estimate the transition probabilites between wet and dry states, for nlag previous days,
+#' Estimate the transition probabilities between wet and dry states, for nlag previous days,
 #' for one station
 #'
 #' @param vec.prec vector nx1 of precipitation for one station
-#' @param vec.dates vector nx1 of dates, whole period
-#' @param isClass vector of logical n x 1 indicating the days concerned by a class (season/WT)
+#' @param isPeriod vector of logical n x 1 indicating the days concerned by a 3-month period
+#' @param isWT vector of logical n x 1 indicating the days concerned by a WT
 #' @param th threshold above which we consider that a day is wet (e.g. 0.2 mm)
 #' @param nlag number of lag days
 #' @param dayScale time resolution
@@ -70,8 +70,8 @@ wet.day.frequency = function(mat.prec, # matrix of precipitation
 #'
 #' @author Guillaume Evin
 lag.trans.proba.vector.byClass = function(vec.prec, # vector nx1 of precipitation for one station
-                                          vec.dates, #vector nx1 of dates, whole period
-                                          isClass, # vector  nx1 of class (integer) 
+                                          isPeriod, # vector nx1 of logical
+                                          isWT, # vector  nx1 of logical
                                           th, # threshold
                                           nlag, # number of lag days
                                           dayScale # time resolution
@@ -86,6 +86,7 @@ lag.trans.proba.vector.byClass = function(vec.prec, # vector nx1 of precipitatio
   # NOTE: we consider that only the current day should be concerned by the class,
   # not the previous days (too restrictive)
   filter.first.days = 1:nVec>nlag
+  isClass = isPeriod & isWT
   ind.isClass = which(isClass&filter.first.days)
   
   # is.wet.lag gives the boolean values indicating if the time step 0, 1, ... ,0+nlag
@@ -128,8 +129,8 @@ lag.trans.proba.vector.byClass = function(vec.prec, # vector nx1 of precipitatio
 #' for all stations
 #'
 #' @param mat.prec matrix of precipitation
-#' @param vec.dates vector nx1 of dates, whole period
-#' @param isClass vector of logical n x 1 indicating the days concerned by a class (season/WT)
+#' @param isPeriod vector of logical n x 1 indicating the days concerned by a 3-month period
+#' @param isWT vector of logical n x 1 indicating the days concerned by a WT
 #' @param th threshold above which we consider that a day is wet (e.g. 0.2 mm)
 #' @param nlag number of lag days
 #' @param dayScale time resolution
@@ -140,14 +141,14 @@ lag.trans.proba.vector.byClass = function(vec.prec, # vector nx1 of precipitatio
 #'
 #' @author Guillaume Evin
 lag.trans.proba.mat.byClass = function(mat.prec, # matrix of precipitation
-                                       vec.dates, # vector of dates
-                                       isClass, # vecotr of logical indicating the dates concerned by this class
+                                       isPeriod, # vector of logical
+                                       isWT, # vector of logical
                                        th, # threshold above which we consider that a day is wet
                                        nlag, # number of lag days
                                        dayScale # time resolution
 ){
   # lag.trans.proba.proba (computeStat_lib)
-  return(apply(mat.prec,2,lag.trans.proba.vector.byClass,vec.dates,isClass,th,nlag,dayScale))
+  return(apply(mat.prec,2,lag.trans.proba.vector.byClass,isPeriod,isWT,th,nlag,dayScale))
 }
 
 
@@ -197,7 +198,6 @@ modify.cor.matrix = function(cor.matrix){
 }
 
 
-
 #==============================================================================
 #' get.df.Student
 #'
@@ -238,7 +238,6 @@ get.df.Student = function(P,Sig,max.df=20){
 }
 
 
-
 #==============================================================================
 #' get.df.Student
 #'
@@ -273,6 +272,34 @@ get.emp.cdf.matrix = function(X){
 
 
 #==============================================================================
+#' get.list.month
+#' 
+#' return a vector of 3-char tags of the 12 months
+get.list.month = function(){
+  return(c('JAN','FEB','MAR','APR','MAY','JUN','JUL','AOU','SEP','OCT','NOV','DEC'))
+}
+
+
+#==============================================================================
+#' get.period.fitting.month
+#' 
+#' return the 3 indices corresponding to the 3-month period of a month ('JAN')
+get.period.fitting.month = function(m.char){
+  # m.char: 3-letter name of a month (e.g. 'JAN')
+  
+  # list of months
+  list.m = get.list.month()
+  
+  # index of this month
+  i.m = which(list.m==m.char)
+  
+  # return 3-month period corresponding to this month
+  vec.m.ext = c(12,1:12,1)
+  return(vec.m.ext[i.m:(i.m+2)])
+}
+
+
+#==============================================================================
 #' get.list.season
 #'
 #' get the vector of the four seasons c('DJF','MAM','JJA','SON')
@@ -281,6 +308,7 @@ get.emp.cdf.matrix = function(X){
 get.list.season = function(){
   return(c('DJF','MAM','JJA','SON'))
 }
+
 
 #==============================================================================
 #' month2season
@@ -294,9 +322,6 @@ month2season = function(vecMonth){
   iSeason = c(1,1,2,2,2,3,3,3,4,4,4,1)
   return(iSeason[vecMonth])
 }
-
-
-
 
 
 #==============================================================================
@@ -366,132 +391,6 @@ rEGPD.GI = function(n,kappa,sig,xi){
   rEGPD = qEGPD.GI(u,kappa,sig,xi)
   return(rEGPD)
 }
-
-
-#==============================================================================
-#' EGPDI.mu0, EGPDI.mu1, EGPDI.mu2
-#'
-#' first three noncensored Probability Weighted Moments (PWMs), see p. 2767 in Naveau
-#' et al. (2016)
-#'
-#' @param kappa transformation parameter for the lower tail
-#' @param sig scale parameter
-#' @param xi shape paramter for the upper tail
-#'
-#' @return mu0, mu1 and mu2
-#'
-#' @author Guillaume Evin
-#'
-#' @references Naveau, Philippe, Raphael Huser, Pierre Ribereau, and Alexis Hannart.
-#' 2016. “Modeling Jointly Low, Moderate, and Heavy Rainfall Intensities without a 
-#' Threshold Selection.” Water Resources Research 52 (4): 2753–69. https://doi.org/10.1002/2015WR018552.
-EGPDI.mu0 = function(kappa,sig,xi){
-  mu0 = (sig/xi)*(kappa*beta(kappa,1-xi)-1)
-  return(mu0)
-}
-EGPDI.mu1 = function(kappa,sig,xi){
-  mu1 = (sig/xi)*(kappa*(beta(kappa,1-xi)-beta(2*kappa,1-xi))-1/2)
-  return(mu1)
-}
-EGPDI.mu2 = function(kappa,sig,xi){
-  mu2 = (sig/xi)*(kappa*(beta(kappa,1-xi)-2*beta(2*kappa,1-xi)+beta(3*kappa,1-xi))-1/3)
-  return(mu2)
-}
-
-
-#==============================================================================
-#' EGPD.fPWM
-#'
-#' Evaluate the differences between empirical and theoretical PWMs for the EGPD distribution
-#'
-#' @param par vector(kappa, sig, xi) of parameters
-#' @param pwm vector of the three first empirical PWMs
-#'
-#' @return vect0r of differences for the set of three equations
-#'
-#' @author Guillaume Evin
-EGPD.fPWM = function(par,pwm){
-  kappa = par[1]
-  sig = par[2]
-  xi = par[3]
-  
-  y = numeric(3)
-  y[1] = EGPDI.mu0(kappa,sig,xi) - pwm[1]
-  y[2] = EGPDI.mu1(kappa,sig,xi) - pwm[2]
-  y[3] = EGPDI.mu2(kappa,sig,xi) - pwm[3]
-  
-  return(y)
-}
-
-
-#==============================================================================
-#' EGPD.fit.PWM
-#'
-#' estimate the three parameters kappa,sigma,xi of the EGPD distribution
-#' using the PWM approach. It applies a numerical solver of the system of 
-#' nonlinear equations (differences between theoretical and empirical moments)
-#'
-#' @param x vector of precipitation internsities
-#'
-#' @return estimates of the three parameters c(kappa,sig,xi) for the EGPD distribution
-#'
-#' @author Guillaume Evin
-EGPD.fit.PWM = function(x){
-  sam.pwm = c(EnvStats::pwMoment(x,k=0),
-              EnvStats::pwMoment(x,k=1),
-              EnvStats::pwMoment(x,k=2))
-  
-  return(nleqslv::nleqslv(c(2,sd(x),0.1),EGPD.fPWM,jac=NULL,pwm=sam.pwm))
-}
-
-
-#==============================================================================
-#' EGPD.fPWM.cst
-#'
-#' Evaluate the differences between empirical and theoretical PWMs for the EGPD distribution
-#' but just for the two first moments, assuming the xi values as known
-#'
-#' @param par vector(kappa, sig) of parameters
-#' @param pwm vector of the two first empirical PWMs
-#' @param xi.val xi value known a priori
-#'
-#' @return vect0r of differences for the set of two equations
-#'
-#' @author Guillaume Evin
-EGPD.fPWM.cst = function(par,pwm,xi.val){
-  kappa = par[1]
-  sig = par[2]
-  xi = xi.val
-  
-  y = numeric(2)
-  y[1] = EGPDI.mu0(kappa,sig,xi) - pwm[1]
-  y[2] = EGPDI.mu1(kappa,sig,xi) - pwm[2]
-  
-  return(y)
-}
-
-#==============================================================================
-#' EGPD.fit.PWM.cst
-#'
-#' estimate the three parameters kappa,sigma of the EGPD distribution
-#' using the PWM approach, assuming xi as known. It applies a numerical solver of the system of 
-#' nonlinear equations (differences between theoretical and empirical moments)
-#'
-#' @param x vector of precipitation internsities
-#' @param xi.val xi value known a priori
-#'
-#' @return estimates of the two parameters c(kappa,sig) for the EGPD distribution
-#'
-#' @author Guillaume Evin
-EGPD.fit.PWM.cst = function(x,xi.val){
-  sam.pwm = c(EnvStats::pwMoment(x,k=0),
-              EnvStats::pwMoment(x,k=1))
-  if(xi.val<0.001) xi.val=0.001
-  fit.out = nleqslv::nleqslv(c(2,sd(x)),EGPD.fPWM.cst,jac=NULL,pwm=sam.pwm,xi.val=xi.val)
-  fit.out$x = c(fit.out$x,xi.val)
-  return(fit.out)
-}
-
 
 
 #==============================================================================
@@ -636,7 +535,8 @@ get.listOption = function(listOption){
 #' find omega correlation leading to estimates cor between occurrences
 #'
 #' @param P.mat matrix of precipitation n x p
-#' @param isClass vector of logical n x 1 indicating the days concerned by a class (season/WT)
+#' @param isPeriod vector of logical n x 1 indicating the days concerned by a 3-month period
+#' @param isWT vector of logical n x 1 indicating the days concerned by a WT
 #' @param th threshold above which we consider that a day is wet (e.g. 0.2 mm)
 #' @param nLag order of the Markov chain
 #' @param pr.state output of function \code{\link{lag.trans.proba.mat.byClass}}
@@ -653,7 +553,9 @@ get.listOption = function(listOption){
 #' }
 #'
 #' @author Guillaume Evin
-infer.mat.omega = function(P.mat,isClass,th,nLag,pr.state,nChainFit,isParallel,minConcDays,mat.distance){
+infer.mat.omega = function(P.mat,isPeriod,isWT,th,nLag,pr.state,nChainFit,isParallel,minConcDays,mat.distance){
+  # class = WT x Period
+  isClass = isPeriod & isWT
   
   # filtered matrix of precipitation for this period (3-mon moving window by dafault)
   P.mat.class = P.mat[isClass,]
@@ -685,8 +587,10 @@ infer.mat.omega = function(P.mat,isClass,th,nLag,pr.state,nChainFit,isParallel,m
   dist.zz = dist.vec[zz]
   
   # robust linear regression
-  loess.out = loess(cc~dd,data = data.frame(cc=cor.zz,dd=dist.zz), control=loess.control(surface="direct"))
-  cor.occ.obs[is.na(cor.vec)] = predict(loess.out,newdata = data.frame(dd=dist.vec[is.na(cor.vec)]))
+  if(any(is.na(cor.vec))){
+    loess.out = loess(cc~dd,data = data.frame(cc=cor.zz,dd=dist.zz), control=loess.control(surface="direct"))
+    cor.occ.obs[is.na(cor.vec)] = predict(loess.out,newdata = data.frame(dd=dist.vec[is.na(cor.vec)]))
+  }
   
   # number of possible transitions
   n.comb = 2^nLag
@@ -1249,7 +1153,8 @@ cor.obs.occ = function(pi00,pi0,pi1){
 #'
 #' estimate parameters which control the spatial dependence between intensities using a copula
 #' @param P.mat precipitation matrix
-#' @param isClass vector of logical n x 1 indicating the days concerned by a class (season/WT)
+#' @param isPeriod vector of logical n x 1 indicating the days concerned by a 3-month period
+#' @param isWT vector of logical n x 1 indicating the days concerned by a WT
 #' @param infer.mat.omega.out output of \code{\link{infer.mat.omega}}
 #' @param nLag order of he Markov chain for the transitions between dry and wet states (=2 by default)
 #' @param th threshold above which we consider that a day is wet (e.g. 0.2 mm)
@@ -1258,14 +1163,17 @@ cor.obs.occ = function(pi00,pi0,pi1){
 #' @param isMAR logical value, do we apply a Autoregressive Multivariate Autoregressive model (order 1) =TRUE by default
 #' @param copulaInt 'Gaussian' or 'Student': type of dependence for amounts (='Student' by default)
 #' @param isParallel logical: indicate computation in parallel or not (easier for debugging)
-#' @param minConcDays integer: minimum number of concomittant days for estimation between each pair of station
+#' @param minConcDays integer: minimum number of concomitant days for estimation between each pair of station
 #' @param mat.distance matrix of distance between each pair of stations
 #' 
 #' @return \item{list}{list of estimates (e.g., M0, dfStudent)}
 #'
 #' @author Guillaume Evin
-infer.dep.amount = function(P.mat,isClass,infer.mat.omega.out,nLag,th,parMargin,nChainFit,
+infer.dep.amount = function(P.mat,isPeriod,isWT,infer.mat.omega.out,nLag,th,parMargin,nChainFit,
                             isMAR,copulaInt,isParallel,minConcDays,mat.distance){
+  # Class = WT x Period
+  isClass = isPeriod & isWT
+  
   # number of stations
   p = ncol(P.mat)
   n = nrow(P.mat)
@@ -1300,8 +1208,10 @@ infer.dep.amount = function(P.mat,isClass,infer.mat.omega.out,nLag,th,parMargin,
   dist.zz = dist.vec[zz]
   
   # robust linear regression
-  loess.out = loess(cc~dd,data = data.frame(cc=cor.zz,dd=dist.zz), control=loess.control(surface="direct"))
-  cor.int[is.na(cor.vec)] = predict(loess.out,newdata = data.frame(dd=dist.vec[is.na(cor.vec)]))
+  if(any(is.na(cor.vec))){
+    loess.out = loess(cc~dd,data = data.frame(cc=cor.zz,dd=dist.zz), control=loess.control(surface="direct"))
+    cor.int[is.na(cor.vec)] = predict(loess.out,newdata = data.frame(dd=dist.vec[is.na(cor.vec)]))
+  }
   
   
   #### find corresponding needed zeta correlations between simulated intensities
@@ -1336,10 +1246,10 @@ infer.dep.amount = function(P.mat,isClass,infer.mat.omega.out,nLag,th,parMargin,
     vec.ar1 = get.vec.autocor(vec.ar1.obs,get.M0.out$Xt,parMargin,nChainFit,isParallel)
     
     # apply a MAR(1) process: multivariate autoregressive process, order 1
-    par.dep.amount = fit.MAR1.amount(P.mat,isClass,th,copulaInt,M0=M0,A=diag(vec.ar1))
+    par.dep.amount = fit.MAR1.amount(P.mat,isPeriod,isWT,th,copulaInt,M0=M0,A=diag(vec.ar1))
   }else{
     # spatial process
-    par.dep.amount = fit.copula.amount(P.mat,isClass,th,copulaInt,M0)
+    par.dep.amount = fit.copula.amount(P.mat,isPeriod,isWT,th,copulaInt,M0)
   }
 }
 
@@ -1349,16 +1259,20 @@ infer.dep.amount = function(P.mat,isClass,infer.mat.omega.out,nLag,th,parMargin,
 #'
 #' estimate parameters which control the spatial dependence between intensities using a copula
 #' @param P.mat precipitation matrix
-#' @param isClass vector of logical n x 1 indicating the days concerned by a class (season/WT)
+#' @param isPeriod vector of logical n x 1 indicating the days concerned by a 3-month period
+#' @param isWT vector of logical n x 1 indicating the days concerned by a WT
 #' @param th threshold above which we consider that a day is wet (e.g. 0.2 mm)
-#' @param copulaInt type of dependance between inter-site amounts: 'Gaussian' or 'Student'
+#' @param copulaInt type of dependence between inter-site amounts: 'Gaussian' or 'Student'
 #' @param M0 Matrix containing the inter-site spatial correlations
 #'
 #' @return \item{list}{list of estimates (e.g., M0, dfStudent)}
 #'
 #' @author Guillaume Evin
-fit.copula.amount = function(P.mat,isClass,th,copulaInt,M0)
+fit.copula.amount = function(P.mat,isPeriod,isWT,th,copulaInt,M0)
 {
+  # Class = Period x WT
+  isClass = isPeriod & isWT
+  
   # number of stations
   p = ncol(P.mat)
   n = nrow(P.mat)
@@ -1402,7 +1316,8 @@ fit.copula.amount = function(P.mat,isClass,th,copulaInt,M0)
 #' Precipitation Simulation.” Hydrology and Earth System Sciences 13 (12): 2299–2314. https://doi.org/10.5194/hess-13-2299-2009.
 #' 
 #' @param P.mat precipitation matrix
-#' @param isClass vector of logical n x 1 indicating the days concerned by a class (season/WT)
+#' @param isPeriod vector of logical n x 1 indicating the days concerned by a 3-month period
+#' @param isWT vector of logical n x 1 indicating the days concerned by a WT
 #' @param th threshold above which we consider that a day is wet (e.g. 0.2 mm)
 #' @param copulaInt type of dependance between inter-site amounts: 'Gaussian' or 'Student'
 #' @param M0 Matrix containing the inter-site spatial correlations
@@ -1419,7 +1334,10 @@ fit.copula.amount = function(P.mat,isClass,th,copulaInt,M0)
 #' }
 #'
 #' @author Guillaume Evin
-fit.MAR1.amount = function(P.mat,isClass,th,copulaInt,M0,A){
+fit.MAR1.amount = function(P.mat,isPeriod,isWT,th,copulaInt,M0,A){
+  # Class = Period x WT
+  isClass = isPeriod & isWT
+  
   # dimensions
   p = ncol(P.mat)
   n = nrow(P.mat)
@@ -1436,7 +1354,6 @@ fit.MAR1.amount = function(P.mat,isClass,th,copulaInt,M0,A){
   if(copulaInt=='Gaussian'){
     # For 'Gaussian', we only compute the inter-site correlations
     return(list(M0=M0,A=A,covZ=covZ,sdZ=sdZ,corZ=corZ))
-    
   }else if(copulaInt=='Student'){
     # on the contrary to GWEX, here I consider all days of the class (where there might
     # not be many elements) and the corr. previous days in order to increase the possible
@@ -1491,7 +1408,6 @@ unif.to.prec = function(pI,U){
 }
 
 
-
 #==============================================================================
 #' fit.GWex.prec
 #'
@@ -1501,8 +1417,10 @@ unif.to.prec = function(pI,U){
 #' 22 (1): 655–672. doi.org/10.5194/hess-22-655-2018.
 #'
 #' @param objGwexObs object of class \code{\linkS4class{GwexObs}}
-#' @param parMargin list of matrices: for each element of the list (class), a matrix nStation x 3 of pre-estimated EGPD parameters
 #' @param coord matrix nStation x 2 of coordinates
+#' @param parMargin list with two levels parMargin[[iM]][[iWT]] where the iM indicating
+#'  a month (1...12) and iWT indicates a weather type (integer), each element contains a 
+#' matrix nStation x 3 of pre-estimated EGPD parameters
 #' @param listOption  list with the following fields:
 #' \itemize{
 #'   \item \strong{th}: threshold value in mm above which precipitation observations are considered to be non-zero (=0.2 by default)
@@ -1515,7 +1433,7 @@ unif.to.prec = function(pI,U){
 #'   \item \strong{isParallel}: logical indicating the parallel computation
 #'   \item \strong{minConcDays}: minimum number of concomittant days for each pair of stations
 #' }
-#' @param vecClass vector of characters indicating the class for each date (season / month / weather type) 
+#' @param vecWT vector n x 1 of integers indicating the WT for each date
 #'
 #' @export
 #'
@@ -1538,7 +1456,7 @@ unif.to.prec = function(pI,U){
 #'   Student copula, \code{dfStudent} indicates the \eqn{\nu} parameter.
 #'   }
 #' @author Guillaume Evin
-fit.GWex.prec = function(objGwexObs,coord,parMargin,listOption=NULL,vecClass=NULL){
+fit.GWex.prec = function(objGwexObs,coord,parMargin,listOption=NULL,vecWT=NULL){
   
   # get/check options
   listOption = get.listOption(listOption)
@@ -1564,39 +1482,35 @@ fit.GWex.prec = function(objGwexObs,coord,parMargin,listOption=NULL,vecClass=NUL
     dayScale = 1
   }
   
-  ######### build / retrieve classes ##########
   
-  if(is.null(vecClass)){
-    # vector of months for all dates
-    vec.month = as.numeric(strftime(vec.dates, "%m"))
-    
-    # seasons as numbers 1:4 (ex. "DJF"==1)
-    vecClassNum = month2season(vec.month)
-    nclass = 4
-    
-    # "DJF" "MAM" "JJA" "SON"
-    vecClassChar = get.list.season()
+  #########  Process dates and periods   ######### 
+  
+  # vector of integers indicating the months (1,1,1,...)
+  vec.month = as.numeric(strftime(vec.dates, "%m"))
+  
+  # vector of 12 x 3-char "JAN" "FEB" ....
+  vec.month.char = get.list.month()
+  
+  
+  ######### build / retrieve weather types ##########
+  
+  if(is.null(vecWT)){
+    # default vector of weather type
+    vecWT = rep(1,nrow(P.mat))
   }else{
     if(listOption$is3Damount){
-      vecClass = vecClass[seq(from=1,to=n-2,by=3)]
+      vecWT = vecWT[seq(from=1,to=n-2,by=3)]
     }
     
-    # vector of unique classes
-    vecClassChar = unique(vecClass)
-    nclass = length(vecClassChar)
-    
-    # vector of classes as integer
-    vecClassNum = vector(length=length(vecClass))
-    for(iclass in 1:nclass){
-      isclass = vecClass == vecClassChar[iclass]
-      vecClassNum[isclass] = iclass
-    }
+    # number of weather types
+    # !! Assume that weather types are numbered from 1 to nWT !!
+    nWT = length(unique(vecWT))
   }
   
   # number of stations
   p = ncol(P.mat)
   
- # euclidian distances between each pair of stations
+  # euclidian distances between each pair of stations
   mat.distance = matrix(nrow = p, ncol = p)
   for(i in 1:p){
     for(j in 1:p){
@@ -1622,43 +1536,60 @@ fit.GWex.prec = function(objGwexObs,coord,parMargin,listOption=NULL,vecClass=NUL
   # - spatial process for positive intensities
   #==============================================================================
   
-  for(iclass in 1:nclass){
+  for(iMonth in 1:12){
+    # prepare lists
+    list.pr.state[[iMonth]] = list()
+    list.parMargin[[iMonth]] = list()
+    list.mat.omega[[iMonth]] = list()
+    list.par.dep.amount[[iMonth]] = list()
     
-    # classification
-    classChar = vecClassChar[iclass]
-    isClass = vecClassNum == iclass
+    # month
+    m = vec.month.char[iMonth]
     
-    #-------------------------------------------
-    # wet/dry transition probabilities
-    #-------------------------------------------
-    pr.state = lag.trans.proba.mat.byClass(P.mat,vec.dates,isClass,listOption$th,listOption$nLag,listOption$dayScale)
-    list.pr.state[[classChar]] = pr.state
+    # period for this month
+    period.m = get.period.fitting.month(m)
     
+    # dates concerned by the 3-month window
+    isPeriod = vec.month%in%period.m
     
-    #-------------------------------------------
-    # parameters of the marginal distributions
-    #-------------------------------------------
-    parMargin.class = parMargin[[classChar]]
-    list.parMargin[[classChar]] = parMargin.class
-    
-    
-    #-------------------------------------------
-    # - spatial process for wet.dry states
-    #-------------------------------------------
-    infer.mat.omega.out = infer.mat.omega(P.mat,isClass,listOption$th,listOption$nLag,
-                                          pr.state,listOption$nChainFit,
-                                          listOption$isParallel,listOption$minConcDays,mat.distance)
-    list.mat.omega[[classChar]] = infer.mat.omega.out
-    
-    
-    #-------------------------------------------
-    # - spatial process for positive intensities
-    #-------------------------------------------
-    infer.dep.amount.out = infer.dep.amount(P.mat,isClass,infer.mat.omega.out,
-                                            listOption$nLag,listOption$th,parMargin.class,
-                                            listOption$nChainFit,listOption$isMAR,listOption$copulaInt,
+    for(iWT in 1:nWT){
+      
+      # dates concerned by this weather type
+      isWT = vecWT==iWT
+      
+      
+      #-------------------------------------------
+      # wet/dry transition probabilities
+      #-------------------------------------------
+      pr.state = lag.trans.proba.mat.byClass(P.mat,isPeriod,isWT,listOption$th,listOption$nLag,listOption$dayScale)
+      list.pr.state[[iMonth]][[iWT]] = pr.state
+      
+      
+      #-------------------------------------------
+      # parameters of the marginal distributions
+      #-------------------------------------------
+      parMargin.class = parMargin[[iMonth]][[iWT]]
+      list.parMargin[[iMonth]][[iWT]] = parMargin.class
+      
+      
+      #-------------------------------------------
+      # - spatial process for wet.dry states
+      #-------------------------------------------
+      infer.mat.omega.out = infer.mat.omega(P.mat,isPeriod,isWT,listOption$th,listOption$nLag,
+                                            pr.state,listOption$nChainFit,
                                             listOption$isParallel,listOption$minConcDays,mat.distance)
-    list.par.dep.amount[[classChar]] = infer.dep.amount.out
+      list.mat.omega[[iMonth]][[iWT]] = infer.mat.omega.out
+      
+      
+      #-------------------------------------------
+      # - spatial process for positive intensities
+      #-------------------------------------------
+      infer.dep.amount.out = infer.dep.amount(P.mat,isPeriod,isWT,infer.mat.omega.out,
+                                              listOption$nLag,listOption$th,parMargin.class,
+                                              listOption$nChainFit,listOption$isMAR,listOption$copulaInt,
+                                              listOption$isParallel,listOption$minConcDays,mat.distance)
+      list.par.dep.amount[[iMonth]][[iWT]] = infer.dep.amount.out
+    }
   }
   
   if(listOption$isParallel){
@@ -1668,11 +1599,12 @@ fit.GWex.prec = function(objGwexObs,coord,parMargin,listOption=NULL,vecClass=NUL
   # return a list of all the parameters
   listPar = list(parOcc=list(list.pr.state=list.pr.state,list.mat.omega=list.mat.omega),
                  parInt=list(cor.int=list.par.dep.amount,parMargin=list.parMargin),
-                 p=p,class=vecClassChar)
+                 p=p,class=vecWT)
   
   # return options and estimated parameters
   return(list(listOption=listOption,listPar=listPar))
 }
+
 
 ###===============================###===============================###
 #' disag.3D.to.1D
@@ -1747,12 +1679,13 @@ disag.3D.to.1D = function(Yobs, # matrix of observed intensities at 24h: (nTobs*
 #' generate boolean variates which describe the dependence
 #' between intersite occurrence correlations and wet/dry persistence
 #' @param objGwexFit object of class GwexFit
-#' @param vecClass vector of class
+#' @param vecWT vector n x 1 of integers indicating the weather types
+#' @param vecMonth vector n x 1 of integers indicating the months
 #'
 #' @return \item{matrix of logical}{occurrences simulated}
 #'
 #' @author Guillaume Evin
-sim.GWex.occ = function(objGwexFit,vecClass){
+sim.GWex.occ = function(objGwexFit,vecWT,vecMonth){
   # number of stations
   p = getNbStations(objGwexFit)
   
@@ -1760,7 +1693,7 @@ sim.GWex.occ = function(objGwexFit,vecClass){
   nLag = objGwexFit@fit$listOption$nLag
   
   # length of the time series generated
-  n = length(vecClass)
+  n = length(vecWT)
   
   # prepare simulation occurrence
   Xt = rndNorm = array(0,dim=c(n,p))
@@ -1772,17 +1705,18 @@ sim.GWex.occ = function(objGwexFit,vecClass){
   parOcc = objGwexFit@fit$listPar$parOcc
   
   # a matrix of possible combination n.comb x nLag
-  mat.comb = as.matrix(parOcc$list.pr.state[[1]][[1]][,1:nLag])
+  mat.comb = as.matrix(parOcc$list.pr.state[[1]][[1]][[1]][,1:nLag])
   
-  # initialise array of transitions (Gaussian quantiles)
+  # initialize array of transitions (Gaussian quantiles)
   Qtrans = array(0,dim=c(n,p,n.comb))
   
   for(t in 1:n){
     # filter
-    cc = vecClass[t]
+    iWT.t = vecWT[t]
+    iMonth.t = vecMonth[t]
     
     # prob / normal quantiles of transitions
-    Ptrans.list = lapply(parOcc$list.pr.state[[cc]],'[',nLag+1)
+    Ptrans.list = lapply(parOcc$list.pr.state[[iMonth.t]][[iWT.t]],'[',nLag+1)
     Qtrans.list = lapply(Ptrans.list,function(x) qnorm(unlist(x)))
     Qtrans.mat = matrix(unlist(Qtrans.list), ncol=n.comb, byrow=T)
     for(i.st in 1:p){
@@ -1793,7 +1727,7 @@ sim.GWex.occ = function(objGwexFit,vecClass){
     }
     
     # generate multivariate gaussian
-    rndNorm[t,] = MASS::mvrnorm(1,rep(0,p),parOcc$list.mat.omega[[cc]]$mat.omega)
+    rndNorm[t,] = MASS::mvrnorm(1,rep(0,p),parOcc$list.mat.omega[[iMonth.t]][[iWT.t]]$mat.omega)
   }
   
   
@@ -1816,17 +1750,18 @@ sim.GWex.occ = function(objGwexFit,vecClass){
 #'
 #' get relevant parameters
 #' @param objGwexFit object of class GwexFit
-#' @param classChar class (e.g. month)
+#' @param iM integer indicating the month
+#' @param iWT integer indicating the weather type
 #'
 #' @return \item{list}{list of parameters}
 #'
 #' @author Guillaume Evin
-sim.GWex.Yt.Pr.get.param = function(objGwexFit,classChar){
+sim.GWex.Yt.Pr.get.param = function(objGwexFit,iM,iWT){
   # extract relevant parameters
-  fitParCorIntclassChar = objGwexFit@fit$listPar$parInt$cor.int[[classChar]]
+  fitParCorIntclass = objGwexFit@fit$listPar$parInt$cor.int[[iM]][[iWT]]
   
   # return results
-  return(fitParCorIntclassChar)
+  return(fitParCorIntclass)
 }
 
 
@@ -1893,12 +1828,13 @@ sim.Zt.MAR = function(PAR,copulaInt,Zprev,p){
 #' generate uniform variates which describe the dependence between intersite amount
 #' correlations
 #' @param objGwexFit object of class GwexFit
-#' @param vecClass vector of class
+#' @param vecWT vector n x 1 of integers indicating the weather types
+#' @param vecMonth vector n x 1 of integer indicating the months
 #'
 #' @return \item{matrix}{matrix n x p of uniform dependent variates}
 #'
 #' @author Guillaume Evin
-sim.GWex.Yt.Pr = function(objGwexFit,vecClass){
+sim.GWex.Yt.Pr = function(objGwexFit,vecWT,vecMonth){
   # retrieve some options
   isMAR = objGwexFit@fit$listOption$isMAR
   copulaInt = objGwexFit@fit$listOption$copulaInt
@@ -1907,7 +1843,7 @@ sim.GWex.Yt.Pr = function(objGwexFit,vecClass){
   p = getNbStations(objGwexFit)
   
   # length of the time series generated at the end
-  n = length(vecClass)
+  n = length(vecWT)
   
   # prepare matrix with Gaussian variates
   Yt.Gau = array(0,dim=c(n,p))
@@ -1916,14 +1852,14 @@ sim.GWex.Yt.Pr = function(objGwexFit,vecClass){
   # for the first iteration, we simulate from the marginal multivariate distribution (no temporal dependence)
   
   # retrieve period and parameters
-  PAR = sim.GWex.Yt.Pr.get.param(objGwexFit,vecClass[1])
+  PAR = sim.GWex.Yt.Pr.get.param(objGwexFit,vecMonth[1],vecWT[1])
   Yt.Gau[1,] = sim.Zt.Spatial(PAR,copulaInt,p)
   
   #_____________ t=2...n _____________
   for(t in 2:n){
     # retrieve period and parameters if necessary
-    if(vecClass[t-1]!=vecClass[t]){
-      PAR = sim.GWex.Yt.Pr.get.param(objGwexFit,vecClass[t])
+    if((vecWT[t-1]!=vecWT[t])|(vecMonth[t-1]!=vecMonth[t])){
+      PAR = sim.GWex.Yt.Pr.get.param(objGwexFit,vecMonth[t],vecWT[t])
     }
     
     if(isMAR){
@@ -1952,39 +1888,45 @@ sim.GWex.Yt.Pr = function(objGwexFit,vecClass){
 #' space
 #'
 #' @param objGwexFit object of class GwexFit
-#' @param vecClass vector of class
-#' @param Yt.Pr niform variates describing dependence between inter-site amounts
+#' @param vecWT vector of integer indicating the weather types
+#' @param vecMonth vector of integer indicating the months
+#' @param Yt.Pr uniform variates describing dependence between inter-site amounts
 #'
 #' @return \item{matrix}{matrix n x p of simulated non-zero precipitation intensities}
 #'
 #' @author Guillaume Evin
-sim.GWex.Yt = function(objGwexFit,vecClass,Yt.Pr){
+sim.GWex.Yt = function(objGwexFit,vecWT,vecMonth,Yt.Pr){
   # number of stations
   p = getNbStations(objGwexFit)
   
   # length of the simulated period: necessarily related to Yt.Pr
   n = nrow(Yt.Pr)
   
-  # prepare simulation pluies
+  # number of weather types
+  nWT = length(unique(vecWT))
+  
+  # prepare simulation precip
   Yt = array(0,dim=c(n,p))
   
   # marginal distributions
   parMargin = objGwexFit@fit$listPar$parInt$parMargin
   
   # Start simulation
-  for(cc in objGwexFit@fit$listPar$class){
-    # filter
-    isClass = vecClass==cc
-    nClass = sum(isClass)
-    
-    # pour chaque station
-    for(st in 1:p){
-      # days for this period as matrix indices
-      i.mat = cbind(which(isClass),rep(st,nClass))
-      # intensities
-      pI = parMargin[[cc]][st,]
-      # inverse-cdf
-      Yt[i.mat] = unif.to.prec(pI,Yt.Pr[i.mat])
+  for(iM in 1:12){
+    for(iWT in 1:nWT){
+      # filter
+      isClass = (vecWT == iWT) & (vecMonth == iM)
+      nClass = sum(isClass)
+      
+      # pour chaque station
+      for(st in 1:p){
+        # days for this period as matrix indices
+        i.mat = cbind(which(isClass),rep(st,nClass))
+        # intensities
+        pI = parMargin[[iM]][[iWT]][st,]
+        # inverse-cdf
+        Yt[i.mat] = unif.to.prec(pI,Yt.Pr[i.mat])
+      }
     }
   }
   
@@ -2034,7 +1976,7 @@ mask.GWex.Yt = function(Xt,Yt){
 #'
 #' @param objGwexFit object of class GwexFit
 #' @param vecDates vector of continuous dates
-#' @param vecClass vector of classification (char) of the same length as vecDates
+#' @param vecWT vector of weather types of the same length as vecDates
 #' @param myseed seed of the random generation, to be fixed if the results need to be replicated
 #' @param objGwexObs optional: necessary if we need observations to simulate (e.g. disaggregation of 3-day periods)
 #' @param prob.class vector of probabilities indicating class of "similar" mean intensities
@@ -2042,7 +1984,7 @@ mask.GWex.Yt = function(Xt,Yt){
 #' @return \item{matrix}{Precipitation simulated for the dates contained in vec.Dates at the different stations}
 #'
 #' @author Guillaume Evin
-sim.GWex.prec.1it = function(objGwexFit,vecDates,vecClass,myseed,objGwexObs,prob.class){
+sim.GWex.prec.1it = function(objGwexFit,vecDates,vecWT,myseed,objGwexObs,prob.class){
   # set seed of random generation
   set.seed(myseed)
   
@@ -2060,14 +2002,18 @@ sim.GWex.prec.1it = function(objGwexFit,vecDates,vecClass,myseed,objGwexObs,prob
     mSimAgg = month2season(as.numeric(format(vecDates,'%m')))
   }
   
+  # vector of integers indicating the months (1,1,1,...)
+  vecMonth = as.numeric(strftime(vecDates, "%m"))
+  
+  
   # Simulation of occurrences
-  Xt = sim.GWex.occ(objGwexFit,vecClass)
+  Xt = sim.GWex.occ(objGwexFit,vecWT,vecMonth)
   
   # Simulation of the spatial and temporal dependence between amounts
-  Yt.Pr = sim.GWex.Yt.Pr(objGwexFit,vecClass)
+  Yt.Pr = sim.GWex.Yt.Pr(objGwexFit,vecWT,vecMonth)
   
   # We obtain directly related intensities
-  Yt = sim.GWex.Yt(objGwexFit,vecClass,Yt.Pr)
+  Yt = sim.GWex.Yt(objGwexFit,vecWT,vecMonth,Yt.Pr)
   
   # if we simulate 3-day periods, we disaggregate these periods, otherwise, we just mask the intensities
   # with the simulated occurrences
