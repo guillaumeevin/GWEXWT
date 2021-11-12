@@ -6,7 +6,7 @@
 #' 
 #' @docType data
 #' 
-#' @author Guillaume Evin \email{guillaume.evin@irstea.fr}
+#' @author Guillaume Evin \email{guillaume.evin@inrae.fr}
 #' 
 #' @usage data(dailyPrecipGWEX)
 #' 
