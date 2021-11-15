@@ -1,8 +1,14 @@
 ###===============================###===============================###
 ### Guillaume Evin
+<<<<<<< HEAD
 ### 08/11/2021, Grenoble
 ###  INRAE - UR ETNA
 ### guillaume.evin@inrae.fr
+=======
+### 19/05/2017, Grenoble
+###  IRSTEA
+### guillaume.evin@irstea.fr
+>>>>>>> 4a60f42a6d4bd1d86a4c729b41a67b4e955c14e8
 ###
 ###  Provide utilities for the estimation and simulation of the GWex
 ### multi-site temperature model.
@@ -124,6 +130,34 @@ predictTempCycle = function(season.fit,vec.Dates){
 
 
 #==============================================================================
+<<<<<<< HEAD
+=======
+# get.period.fitting.temp
+#
+# Get 3-month moving window for one month
+#
+# @param m.char 3-letter name of a month (e.g. 'JAN')
+#
+# @return return 3-month period corresponding to this month (ex c(1,2,3) for February)
+#
+# @author Guillaume Evin
+get.period.fitting.temp =  function(m.char){
+  # m.char:
+
+  # list of months
+  list.m = get.list.month()
+
+  # index of this month
+  i.m = which(list.m==m.char)
+
+  # return 3-month period corresponding to this month
+  vec.m.ext = c(11,12,1:12,1,2)
+  return(vec.m.ext[i.m:(i.m+4)])
+}
+
+
+#==============================================================================
+>>>>>>> 4a60f42a6d4bd1d86a4c729b41a67b4e955c14e8
 # predict.trend
 #
 # Return the trend for an arbitrary period

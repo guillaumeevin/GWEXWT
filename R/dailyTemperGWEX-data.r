@@ -6,7 +6,11 @@
 #' 
 #' @docType data
 #' 
+<<<<<<< HEAD
 #' @author Guillaume Evin \email{guillaume.evin@inrae.fr}
+=======
+#' @author Guillaume Evin \email{guillaume.evin@irstea.fr}
+>>>>>>> 4a60f42a6d4bd1d86a4c729b41a67b4e955c14e8
 #' 
 #' @usage data(dailyTemperGWEX)
 #' 
