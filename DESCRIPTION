@@ -1,9 +1,9 @@
 Package: GWEXWT
 Type: Package
-Date: 2021-10-18
+Date: 2021-11-15
 License: file LICENSE
 Title: Multi-Site Stochastic Models for Daily Precipitation and Temperature using Weather Types
-Version: 1.2.0
+Version: 1.2.1
 Authors@R: c(person("Guillaume","Evin",role = c("aut", "cre"),email="guillaume.evin@inrae.fr"))
 Author: Guillaume Evin [aut, cre]
 Maintainer: Guillaume Evin <guillaume.evin@inrae.fr>

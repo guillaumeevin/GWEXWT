@@ -20,7 +20,7 @@
 #
 # @author Guillaume Evin
 get.version.GWex = function(){
-  return('v1.2.0')
+  return('v1.2.1')
 }
 
 
